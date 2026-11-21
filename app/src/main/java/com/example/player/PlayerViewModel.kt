@@ -1,0 +1,576 @@
+package com.example.player
+
+import android.app.Application
+import android.net.Uri
+import androidx.annotation.OptIn
+import androidx.lifecycle.AndroidViewModel
+import androidx.lifecycle.viewModelScope
+import androidx.media3.common.C
+import androidx.media3.common.Player
+import androidx.media3.common.TrackSelectionOverride
+import androidx.media3.common.text.Cue
+import androidx.media3.common.util.UnstableApi
+import androidx.media3.exoplayer.ExoPlayer
+import com.example.LumaApplication
+import com.example.data.model.AspectRatioMode
+import com.example.data.model.AudioTrackOption
+import com.example.data.model.EqPreset
+import com.example.data.model.PlaybackQueueItem
+import com.example.data.model.PlayerOrientationMode
+import com.example.data.model.SubtitleEdgeStyle
+import com.example.data.model.SubtitleTrackOption
+import com.example.data.model.VideoDiagnostics
+import com.example.data.model.VideoTrackOption
+import com.example.data.preferences.UserSettings
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharingStarted
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
+
+enum class ActivePlayerSheet {
+    NONE, TRACKS, AUDIO_FX, SPEED, TOOLS, DIAGNOSTICS
+}
+
+data class PlayerUiState(
+    val title: String = "Luma Player",
+    val isPlaying: Boolean = false,
+    val isBuffering: Boolean = false,
+    val positionMs: Long = 0L,
+    val durationMs: Long = 0L,
+    val bufferedPositionMs: Long = 0L,
+    val playbackSpeed: Float = 1.0f,
+    val hasNext: Boolean = false,
+    val hasPrevious: Boolean = false,
+    val videoWidth: Int = 16,
+    val videoHeight: Int = 9,
+    val aspectRatioMode: AspectRatioMode = AspectRatioMode.FIT,
+    val zoomScale: Float = 1.0f,
+    val isLocked: Boolean = false,
+    val orientationMode: PlayerOrientationMode = PlayerOrientationMode.AUTO_VIDEO,
+    val abPointAMs: Long? = null,
+    val abPointBMs: Long? = null,
+    val sleepTimerRemainingMs: Long? = null,
+    val sleepAtEndOfVideo: Boolean = false,
+    val activeSheet: ActivePlayerSheet = ActivePlayerSheet.NONE,
+    val videoTracks: List<VideoTrackOption> = emptyList(),
+    val isAutoMaxQuality: Boolean = true,
+    val audioTracks: List<AudioTrackOption> = emptyList(),
+    val subtitleTracks: List<SubtitleTrackOption> = emptyList(),
+    val subtitlesDisabled: Boolean = false,
+    val activeCues: List<Cue> = emptyList(),
+    val statusToast: String? = null
+)
+
+@OptIn(UnstableApi::class)
+class PlayerViewModel(application: Application) : AndroidViewModel(application) {
+
+    private val app = application as LumaApplication
+    private val prefs = app.preferencesRepository
+
+    val settings: StateFlow<UserSettings> = prefs.settingsFlow.stateIn(
+        scope = viewModelScope,
+        started = SharingStarted.Eagerly,
+        initialValue = UserSettings()
+    )
+
+    val playerFlow: StateFlow<ExoPlayer?> = PlayerSessionHolder.activePlayer
+    val currentItem: StateFlow<PlaybackQueueItem?> = PlayerSessionHolder.currentItem
+    val diagnostics: StateFlow<VideoDiagnostics> = PlayerSessionHolder.diagnostics
+    val audioFxState: StateFlow<AudioFxState> = PlayerSessionHolder.audioFxController.state
+    val backgroundPlayActive: StateFlow<Boolean> = PlayerSessionHolder.backgroundPlayActive
+    val playbackError: StateFlow<String?> = PlayerSessionHolder.playbackError
+
+    private val _uiState = MutableStateFlow(PlayerUiState())
+    val uiState: StateFlow<PlayerUiState> = _uiState.asStateFlow()
+
+    private var appliedInitialPrefs = false
+
+    init {
+        viewModelScope.launch {
+            settings.collect { userSettings ->
+                if (!appliedInitialPrefs) {
+                    appliedInitialPrefs = true
+                    _uiState.value = _uiState.value.copy(
+                        aspectRatioMode = userSettings.defaultAspectRatio,
+                        orientationMode = userSettings.defaultOrientation
+                    )
+                }
+            }
+        }
+
+        // High-precision playback ticker (200ms) for seekbar, A-B loop, sleep timer, and synced cues
+        viewModelScope.launch {
+            var lastSleepTick = System.currentTimeMillis()
+            while (isActive) {
+                val now = System.currentTimeMillis()
+                val elapsed = (now - lastSleepTick).coerceIn(0L, 1000L)
+                lastSleepTick = now
+
+                val player = PlayerSessionHolder.activePlayer.value
+                val item = PlayerSessionHolder.currentItem.value
+                val current = _uiState.value
+
+                if (player != null) {
+                    val pos = player.currentPosition.coerceAtLeast(0L)
+                    val dur = player.duration.takeIf { it != C.TIME_UNSET && it > 0L } ?: 0L
+                    val buf = player.bufferedPosition.coerceAtLeast(0L)
+                    val isPlaying = player.isPlaying
+                    val isBuffering = player.playbackState == Player.STATE_BUFFERING
+                    val size = player.videoSize
+                    val vWidth = if (size.width > 0) size.width else current.videoWidth
+                    val vHeight = if (size.height > 0) size.height else current.videoHeight
+
+                    // A-B Repeat check
+                    val ptA = current.abPointAMs
+                    val ptB = current.abPointBMs
+                    if (ptA != null && ptB != null && ptB > ptA + 400L && pos >= ptB) {
+                        player.seekTo(ptA)
+                    }
+
+                    // Sleep timer countdown
+                    var remainingSleep = current.sleepTimerRemainingMs
+                    if (remainingSleep != null && isPlaying) {
+                        val nextRem = remainingSleep - elapsed
+                        if (nextRem <= 0L) {
+                            player.pause()
+                            remainingSleep = null
+                            showToast("Sleep timer finished · Playback paused")
+                        } else {
+                            remainingSleep = nextRem
+                        }
+                    }
+
+                    // Sleep at end of video
+                    var sleepEnd = current.sleepAtEndOfVideo
+                    if (sleepEnd && player.playbackState == Player.STATE_ENDED) {
+                        player.pause()
+                        sleepEnd = false
+                        showToast("Playback paused at end of video")
+                    }
+
+                    val resolvedCues = PlayerSessionHolder.subtitleSyncController.resolveCuesForPosition(pos)
+                    val bufferedPct = player.bufferedPercentage.coerceIn(0, 100)
+                    PlayerSessionHolder.updateDiagnostics { it.copy(bufferedPercent = bufferedPct) }
+
+                    val extracted = extractTracks(player)
+
+                    _uiState.value = current.copy(
+                        title = item?.title ?: player.mediaMetadata.title?.toString() ?: "Luma Player",
+                        isPlaying = isPlaying,
+                        isBuffering = isBuffering,
+                        positionMs = pos,
+                        durationMs = dur,
+                        bufferedPositionMs = buf,
+                        playbackSpeed = player.playbackParameters.speed,
+                        hasNext = player.hasNextMediaItem(),
+                        hasPrevious = player.hasPreviousMediaItem(),
+                        videoWidth = vWidth,
+                        videoHeight = vHeight,
+                        sleepTimerRemainingMs = remainingSleep,
+                        sleepAtEndOfVideo = sleepEnd,
+                        videoTracks = extracted.videoTracks,
+                        isAutoMaxQuality = extracted.isAutoMaxQuality,
+                        audioTracks = extracted.audioTracks,
+                        subtitleTracks = extracted.subtitleTracks,
+                        subtitlesDisabled = extracted.subtitlesDisabled,
+                        activeCues = resolvedCues
+                    )
+                }
+                delay(200L)
+            }
+        }
+    }
+
+    fun togglePlayPause() {
+        val player = PlayerSessionHolder.activePlayer.value ?: return
+        if (player.playbackState == Player.STATE_ENDED) {
+            player.seekTo(0L)
+            player.play()
+        } else if (player.isPlaying) {
+            player.pause()
+        } else {
+            player.play()
+        }
+    }
+
+    fun seekTo(positionMs: Long) {
+        val player = PlayerSessionHolder.activePlayer.value ?: return
+        val maxDur = player.duration.takeIf { it != C.TIME_UNSET && it > 0L } ?: Long.MAX_VALUE
+        player.seekTo(positionMs.coerceIn(0L, maxDur))
+    }
+
+    fun seekBy(deltaMs: Long) {
+        val player = PlayerSessionHolder.activePlayer.value ?: return
+        seekTo(player.currentPosition + deltaMs)
+    }
+
+    fun skipNext() {
+        val player = PlayerSessionHolder.activePlayer.value ?: return
+        if (player.hasNextMediaItem()) {
+            player.seekToNextMediaItem()
+        }
+    }
+
+    fun skipPrevious() {
+        val player = PlayerSessionHolder.activePlayer.value ?: return
+        if (player.currentPosition > 4_000L) {
+            player.seekTo(0L)
+        } else if (player.hasPreviousMediaItem()) {
+            player.seekToPreviousMediaItem()
+        } else {
+            player.seekTo(0L)
+        }
+    }
+
+    fun setPlaybackSpeed(speed: Float) {
+        val clamped = speed.coerceIn(0.25f, 4.0f)
+        PlayerSessionHolder.activePlayer.value?.setPlaybackSpeed(clamped)
+        _uiState.value = _uiState.value.copy(playbackSpeed = clamped)
+    }
+
+    fun setAspectRatioMode(mode: AspectRatioMode) {
+        _uiState.value = _uiState.value.copy(aspectRatioMode = mode, zoomScale = 1.0f)
+        showToast("Aspect Ratio: ${mode.label}")
+    }
+
+    fun cycleAspectRatio() {
+        val all = AspectRatioMode.entries
+        val nextIdx = (all.indexOf(_uiState.value.aspectRatioMode) + 1) % all.size
+        setAspectRatioMode(all[nextIdx])
+    }
+
+    fun updateZoomScale(scale: Float) {
+        _uiState.value = _uiState.value.copy(zoomScale = scale.coerceIn(0.5f, 4.0f))
+    }
+
+    fun resetZoom() {
+        _uiState.value = _uiState.value.copy(zoomScale = 1.0f, aspectRatioMode = AspectRatioMode.FIT)
+        showToast("Reset to Fit (Original Ratio)")
+    }
+
+    fun toggleScreenLock() {
+        val next = !_uiState.value.isLocked
+        _uiState.value = _uiState.value.copy(
+            isLocked = next,
+            activeSheet = if (next) ActivePlayerSheet.NONE else _uiState.value.activeSheet
+        )
+    }
+
+    fun setOrientationMode(mode: PlayerOrientationMode) {
+        _uiState.value = _uiState.value.copy(orientationMode = mode)
+        showToast("Orientation: ${mode.label}")
+    }
+
+    fun cycleOrientation() {
+        val next = when (_uiState.value.orientationMode) {
+            PlayerOrientationMode.AUTO_VIDEO, PlayerOrientationMode.SENSOR -> PlayerOrientationMode.LANDSCAPE
+            PlayerOrientationMode.LANDSCAPE -> PlayerOrientationMode.PORTRAIT
+            PlayerOrientationMode.PORTRAIT -> PlayerOrientationMode.REVERSE_LANDSCAPE
+            PlayerOrientationMode.REVERSE_LANDSCAPE -> PlayerOrientationMode.SENSOR
+        }
+        setOrientationMode(next)
+    }
+
+    fun openSheet(sheet: ActivePlayerSheet) {
+        _uiState.value = _uiState.value.copy(activeSheet = sheet)
+    }
+
+    fun closeSheet() {
+        _uiState.value = _uiState.value.copy(activeSheet = ActivePlayerSheet.NONE)
+    }
+
+    fun selectAutoMaxQuality() {
+        val selector = PlayerSessionHolder.serviceInstance?.getTrackSelector() ?: return
+        selector.setParameters(
+            selector.buildUponParameters()
+                .clearOverridesOfType(C.TRACK_TYPE_VIDEO)
+                .setForceHighestSupportedBitrate(true)
+        )
+        showToast("Quality: Auto Maximum (HDR Priority)")
+    }
+
+    fun selectVideoTrack(option: VideoTrackOption) {
+        val player = PlayerSessionHolder.activePlayer.value ?: return
+        val selector = PlayerSessionHolder.serviceInstance?.getTrackSelector() ?: return
+        val group = player.currentTracks.groups.getOrNull(option.groupIndex) ?: return
+        selector.setParameters(
+            selector.buildUponParameters()
+                .setForceHighestSupportedBitrate(false)
+                .setOverrideForType(TrackSelectionOverride(group.mediaTrackGroup, option.trackIndex))
+        )
+        showToast("Quality locked: ${option.label}")
+    }
+
+    fun selectAudioTrack(option: AudioTrackOption) {
+        val player = PlayerSessionHolder.activePlayer.value ?: return
+        val selector = PlayerSessionHolder.serviceInstance?.getTrackSelector() ?: return
+        val group = player.currentTracks.groups.getOrNull(option.groupIndex) ?: return
+        selector.setParameters(
+            selector.buildUponParameters()
+                .setTrackTypeDisabled(C.TRACK_TYPE_AUDIO, false)
+                .setOverrideForType(TrackSelectionOverride(group.mediaTrackGroup, option.trackIndex))
+        )
+        showToast("Audio: ${option.label}")
+    }
+
+    fun selectSubtitleTrack(option: SubtitleTrackOption?) {
+        val player = PlayerSessionHolder.activePlayer.value ?: return
+        val selector = PlayerSessionHolder.serviceInstance?.getTrackSelector() ?: return
+        if (option == null) {
+            selector.setParameters(
+                selector.buildUponParameters()
+                    .setTrackTypeDisabled(C.TRACK_TYPE_TEXT, true)
+            )
+            showToast("Subtitles Off")
+        } else {
+            val group = player.currentTracks.groups.getOrNull(option.groupIndex) ?: return
+            selector.setParameters(
+                selector.buildUponParameters()
+                    .setTrackTypeDisabled(C.TRACK_TYPE_TEXT, false)
+                    .setOverrideForType(TrackSelectionOverride(group.mediaTrackGroup, option.trackIndex))
+            )
+            showToast("Subtitles: ${option.label}")
+        }
+    }
+
+    fun attachExternalSubtitle(uri: Uri) {
+        PlayerSessionHolder.serviceInstance?.attachExternalSubtitle(uri)
+        showToast("External subtitle loaded")
+    }
+
+    fun updateSubtitleStyle(
+        scale: Float? = null,
+        colorArgb: Int? = null,
+        bgOpacity: Float? = null,
+        edgeStyle: SubtitleEdgeStyle? = null,
+        bottomPadding: Float? = null,
+        syncOffsetMs: Long? = null
+    ) {
+        syncOffsetMs?.let { PlayerSessionHolder.subtitleSyncController.setSyncOffsetMs(it) }
+        viewModelScope.launch {
+            prefs.updateSubtitleSettings(
+                scale = scale,
+                colorArgb = colorArgb,
+                bgOpacity = bgOpacity,
+                edgeStyle = edgeStyle,
+                bottomPadding = bottomPadding,
+                syncOffsetMs = syncOffsetMs
+            )
+        }
+    }
+
+    fun setEqEnabled(enabled: Boolean) {
+        val current = PlayerSessionHolder.audioFxController.state.value
+        PlayerSessionHolder.audioFxController.applyConfig(
+            eqEnabled = enabled,
+            preset = current.preset,
+            bandLevels = current.bandLevelsMillibels,
+            boostPercent = current.boostPercent
+        )
+        viewModelScope.launch { prefs.updateAudioFx(eqEnabled = enabled) }
+    }
+
+    fun selectEqPreset(preset: EqPreset) {
+        val current = PlayerSessionHolder.audioFxController.state.value
+        val bands = if (preset == EqPreset.CUSTOM) current.bandLevelsMillibels else preset.bandOffsetsMillibels
+        PlayerSessionHolder.audioFxController.applyConfig(
+            eqEnabled = true,
+            preset = preset,
+            bandLevels = bands,
+            boostPercent = current.boostPercent
+        )
+        viewModelScope.launch {
+            prefs.updateAudioFx(eqEnabled = true, preset = preset, bands = bands)
+        }
+    }
+
+    fun setEqBandLevel(bandIndex: Int, levelMillibels: Int) {
+        PlayerSessionHolder.audioFxController.setBandLevel(bandIndex, levelMillibels)
+        val updated = PlayerSessionHolder.audioFxController.state.value
+        viewModelScope.launch {
+            prefs.updateAudioFx(
+                eqEnabled = true,
+                preset = EqPreset.CUSTOM,
+                bands = updated.bandLevelsMillibels
+            )
+        }
+    }
+
+    fun setAudioBoost(percent: Int) {
+        val clamped = percent.coerceIn(0, 200)
+        PlayerSessionHolder.audioFxController.setBoostPercent(clamped)
+        viewModelScope.launch { prefs.updateAudioFx(boostPercent = clamped) }
+    }
+
+    fun setAbPointA() {
+        val pos = PlayerSessionHolder.activePlayer.value?.currentPosition ?: return
+        val existingB = _uiState.value.abPointBMs
+        _uiState.value = _uiState.value.copy(
+            abPointAMs = pos,
+            abPointBMs = if (existingB != null && existingB <= pos) null else existingB
+        )
+        showToast("A-B Point A set")
+    }
+
+    fun setAbPointB() {
+        val pos = PlayerSessionHolder.activePlayer.value?.currentPosition ?: return
+        val existingA = _uiState.value.abPointAMs ?: 0L
+        if (pos <= existingA + 400L) {
+            showToast("Point B must be after Point A")
+            return
+        }
+        _uiState.value = _uiState.value.copy(abPointAMs = existingA, abPointBMs = pos)
+        showToast("A-B Repeat Active")
+    }
+
+    fun clearAbRepeat() {
+        _uiState.value = _uiState.value.copy(abPointAMs = null, abPointBMs = null)
+        showToast("A-B Repeat Cleared")
+    }
+
+    fun setSleepTimerMinutes(minutes: Int) {
+        _uiState.value = _uiState.value.copy(
+            sleepTimerRemainingMs = minutes * 60_000L,
+            sleepAtEndOfVideo = false
+        )
+        showToast("Sleep timer: $minutes min")
+    }
+
+    fun setSleepAtEndOfVideo() {
+        _uiState.value = _uiState.value.copy(
+            sleepTimerRemainingMs = null,
+            sleepAtEndOfVideo = true
+        )
+        showToast("Will pause at end of video")
+    }
+
+    fun cancelSleepTimer() {
+        _uiState.value = _uiState.value.copy(
+            sleepTimerRemainingMs = null,
+            sleepAtEndOfVideo = false
+        )
+        showToast("Sleep timer canceled")
+    }
+
+    fun toggleBackgroundPlay() {
+        val next = !PlayerSessionHolder.backgroundPlayActive.value
+        PlayerSessionHolder.setBackgroundPlayActive(next)
+        viewModelScope.launch { prefs.updatePlaybackFlags(backgroundPlay = next) }
+        showToast(if (next) "Background audio enabled" else "Background audio disabled")
+    }
+
+    fun retryPlayback() {
+        PlayerSessionHolder.serviceInstance?.retryCurrentPlayback()
+    }
+
+    fun persistProgressNow() {
+        PlayerSessionHolder.serviceInstance?.persistCurrentProgress()
+    }
+
+    fun showToast(message: String) {
+        _uiState.value = _uiState.value.copy(statusToast = message)
+        viewModelScope.launch {
+            delay(2_200L)
+            if (_uiState.value.statusToast == message) {
+                _uiState.value = _uiState.value.copy(statusToast = null)
+            }
+        }
+    }
+
+    private data class ExtractedTracks(
+        val videoTracks: List<VideoTrackOption>,
+        val isAutoMaxQuality: Boolean,
+        val audioTracks: List<AudioTrackOption>,
+        val subtitleTracks: List<SubtitleTrackOption>,
+        val subtitlesDisabled: Boolean
+    )
+
+    private fun extractTracks(player: ExoPlayer): ExtractedTracks {
+        val videoList = mutableListOf<VideoTrackOption>()
+        val audioList = mutableListOf<AudioTrackOption>()
+        val subList = mutableListOf<SubtitleTrackOption>()
+
+        val selectorParams = PlayerSessionHolder.serviceInstance?.getTrackSelector()?.parameters
+        val hasVideoOverride = selectorParams?.overrides?.values?.any { it.type == C.TRACK_TYPE_VIDEO } == true
+        val subsDisabled = selectorParams?.disabledTrackTypes?.contains(C.TRACK_TYPE_TEXT) == true
+
+        player.currentTracks.groups.forEachIndexed { groupIdx, group ->
+            when (group.type) {
+                C.TRACK_TYPE_VIDEO -> {
+                    for (i in 0 until group.length) {
+                        if (!group.isTrackSupported(i)) continue
+                        val f = group.getTrackFormat(i)
+                        val hdr = LumaPlaybackService.detectHdrLabel(f).takeIf { it != "SDR" }
+                        videoList.add(
+                            VideoTrackOption(
+                                id = "${groupIdx}_$i",
+                                groupIndex = groupIdx,
+                                trackIndex = i,
+                                width = f.width,
+                                height = f.height,
+                                bitrateBps = f.bitrate,
+                                frameRate = f.frameRate,
+                                codec = LumaPlaybackService.simplifyCodec(f.sampleMimeType, f.codecs),
+                                hdrLabel = hdr,
+                                isSelected = group.isTrackSelected(i)
+                            )
+                        )
+                    }
+                }
+                C.TRACK_TYPE_AUDIO -> {
+                    for (i in 0 until group.length) {
+                        val f = group.getTrackFormat(i)
+                        val lang = f.language?.uppercase() ?: "UND"
+                        val label = f.label?.takeIf { it.isNotBlank() }
+                            ?: "Track ${audioList.size + 1} ($lang)"
+                        audioList.add(
+                            AudioTrackOption(
+                                id = "${groupIdx}_$i",
+                                groupIndex = groupIdx,
+                                trackIndex = i,
+                                label = label,
+                                language = lang,
+                                codec = LumaPlaybackService.simplifyCodec(f.sampleMimeType, f.codecs),
+                                channels = f.channelCount,
+                                sampleRateHz = f.sampleRate,
+                                bitrateBps = f.bitrate,
+                                isSelected = group.isTrackSelected(i)
+                            )
+                        )
+                    }
+                }
+                C.TRACK_TYPE_TEXT -> {
+                    for (i in 0 until group.length) {
+                        val f = group.getTrackFormat(i)
+                        val lang = f.language?.uppercase() ?: "EXT"
+                        val label = f.label?.takeIf { it.isNotBlank() }
+                            ?: "Subtitle ${subList.size + 1} ($lang)"
+                        subList.add(
+                            SubtitleTrackOption(
+                                id = "${groupIdx}_$i",
+                                groupIndex = groupIdx,
+                                trackIndex = i,
+                                label = label,
+                                language = lang,
+                                mimeType = f.sampleMimeType?.substringAfter('/')?.uppercase() ?: "TEXT",
+                                isSelected = !subsDisabled && group.isTrackSelected(i)
+                            )
+                        )
+                    }
+                }
+            }
+        }
+
+        return ExtractedTracks(
+            videoTracks = videoList.sortedWith(compareByDescending<VideoTrackOption> { it.height }.thenByDescending { it.bitrateBps }),
+            isAutoMaxQuality = !hasVideoOverride,
+            audioTracks = audioList,
+            subtitleTracks = subList,
+            subtitlesDisabled = subsDisabled || subList.none { it.isSelected }
+        )
+    }
+}
