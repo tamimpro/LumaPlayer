@@ -55,6 +55,8 @@ import com.example.data.local.StreamBookmarkEntity
 import com.example.data.model.FormatUtils
 import com.example.data.model.StreamProtocol
 import com.example.ui.theme.LumaMonoStyle
+import com.example.ui.theme.LumaMotion
+import com.example.ui.theme.lumaPressScale
 
 private data class HeaderEntry(val key: String, val value: String)
 
@@ -226,7 +228,11 @@ fun StreamScreen(
                         }
                     }
 
-                    AnimatedVisibility(visible = showHeadersSection) {
+                    AnimatedVisibility(
+                        visible = showHeadersSection,
+                        enter = LumaMotion.accordionEnter(),
+                        exit = LumaMotion.accordionExit()
+                    ) {
                         Column(
                             modifier = Modifier.padding(top = 12.dp),
                             verticalArrangement = Arrangement.spacedBy(8.dp)
@@ -377,6 +383,8 @@ fun StreamScreen(
                     ),
                     modifier = Modifier
                         .fillMaxWidth()
+                        .animateItem()
+                        .lumaPressScale(0.985f)
                         .testTag("stream_bookmark_${bookmark.id}")
                 ) {
                     Row(

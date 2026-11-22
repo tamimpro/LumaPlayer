@@ -23,6 +23,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Add
+import androidx.compose.material.icons.rounded.Audiotrack
 import androidx.compose.material.icons.rounded.CheckCircle
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.Equalizer
@@ -32,6 +33,7 @@ import androidx.compose.material.icons.rounded.Info
 import androidx.compose.material.icons.rounded.NightlightRound
 import androidx.compose.material.icons.rounded.Remove
 import androidx.compose.material.icons.rounded.Repeat
+import androidx.compose.material.icons.rounded.VolumeOff
 import androidx.compose.material.icons.rounded.VolumeUp
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -116,6 +118,10 @@ fun PlayerActiveModalSheet(
                 .verticalScroll(rememberScrollState())
         ) {
             when (uiState.activeSheet) {
+                ActivePlayerSheet.AUDIO_TRACKS -> AudioTrackSelectorSheet(
+                    uiState = uiState,
+                    viewModel = viewModel
+                )
                 ActivePlayerSheet.TRACKS -> TracksAndSubtitlesSheet(
                     uiState = uiState,
                     settings = settings,
@@ -168,6 +174,98 @@ private fun SheetHeader(title: String, subtitle: String? = null, onClose: () -> 
     Spacer(modifier = Modifier.height(12.dp))
 }
 
+@Composable
+private fun AudioTrackSelectorSheet(
+    uiState: PlayerUiState,
+    viewModel: PlayerViewModel
+) {
+    val countLabel = if (uiState.audioTracks.size > 1) {
+        "${uiState.audioTracks.size} language tracks available · Switch instantly"
+    } else {
+        "Multi-language audio selector for online & local videos"
+    }
+
+    SheetHeader(
+        title = "Audio Language",
+        subtitle = countLabel,
+        onClose = { viewModel.closeSheet() }
+    )
+
+    if (uiState.audioTracks.isEmpty()) {
+        Surface(
+            shape = RoundedCornerShape(14.dp),
+            color = WarmObsidianContainer,
+            border = BorderStroke(1.dp, WarmBorder),
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Row(
+                modifier = Modifier.padding(16.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Icon(Icons.Rounded.Audiotrack, contentDescription = null, tint = CinemaAmber)
+                Spacer(modifier = Modifier.width(12.dp))
+                Text(
+                    "Default audio stream is active. If this stream contains multiple languages, they will appear here once detected.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = WarmStoneSecondary
+                )
+            }
+        }
+    } else {
+        uiState.audioTracks.forEach { track ->
+            val detail = buildString {
+                append(track.codec)
+                append(" · ")
+                append(FormatUtils.channelLayoutLabel(track.channels))
+                if (track.sampleRateHz > 0) append(" · ${track.sampleRateHz / 1000} kHz")
+                if (track.bitrateBps > 0) append(" · ${FormatUtils.formatBitrate(track.bitrateBps)}")
+            }
+            TrackSelectionRow(
+                title = track.label,
+                subtitle = detail,
+                selected = track.isSelected && !uiState.audioDisabled,
+                badge = track.language,
+                onClick = {
+                    viewModel.selectAudioTrack(track)
+                    viewModel.closeSheet()
+                },
+                modifier = Modifier.testTag("audio_track_option_${track.id}")
+            )
+            Spacer(modifier = Modifier.height(8.dp))
+        }
+    }
+
+    Spacer(modifier = Modifier.height(4.dp))
+    TrackSelectionRow(
+        title = "Disable / Mute Audio",
+        subtitle = "Turn off audio track output for this video",
+        selected = uiState.audioDisabled,
+        badge = "MUTE",
+        onClick = { viewModel.selectAudioTrack(null) },
+        modifier = Modifier.testTag("audio_track_mute_option")
+    )
+
+    Spacer(modifier = Modifier.height(14.dp))
+    Row(horizontalArrangement = Arrangement.spacedBy(10.dp), modifier = Modifier.fillMaxWidth()) {
+        OutlinedButton(
+            onClick = { viewModel.openSheet(ActivePlayerSheet.AUDIO_FX) },
+            modifier = Modifier.weight(1f)
+        ) {
+            Icon(Icons.Rounded.Equalizer, contentDescription = null, modifier = Modifier.size(18.dp))
+            Spacer(modifier = Modifier.width(6.dp))
+            Text("Equalizer & Boost")
+        }
+        OutlinedButton(
+            onClick = { viewModel.openSheet(ActivePlayerSheet.TRACKS) },
+            modifier = Modifier.weight(1f)
+        ) {
+            Icon(Icons.Rounded.VolumeOff, contentDescription = null, modifier = Modifier.size(18.dp))
+            Spacer(modifier = Modifier.width(6.dp))
+            Text("Subtitles & Quality")
+        }
+    }
+}
+
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun TracksAndSubtitlesSheet(
@@ -177,11 +275,11 @@ private fun TracksAndSubtitlesSheet(
     onPickExternalSubtitle: () -> Unit
 ) {
     var selectedTab by remember { mutableIntStateOf(0) }
-    val tabs = listOf("Video Quality", "Audio", "Subtitles")
+    val tabs = listOf("Video Quality", "Audio (${uiState.audioTracks.size})", "Subtitles")
 
     SheetHeader(
         title = "Tracks & Subtitles",
-        subtitle = "100% original quality · Multi-track audio & synced captions",
+        subtitle = "100% original quality · Multi-language audio & synced captions",
         onClose = { viewModel.closeSheet() }
     )
 
@@ -251,13 +349,20 @@ private fun TracksAndSubtitlesSheet(
                     TrackSelectionRow(
                         title = track.label,
                         subtitle = detail,
-                        selected = track.isSelected,
+                        selected = track.isSelected && !uiState.audioDisabled,
                         badge = track.language,
                         onClick = { viewModel.selectAudioTrack(track) }
                     )
                     Spacer(modifier = Modifier.height(8.dp))
                 }
             }
+            TrackSelectionRow(
+                title = "Disable / Mute Audio",
+                subtitle = "Silence audio output",
+                selected = uiState.audioDisabled,
+                badge = "MUTE",
+                onClick = { viewModel.selectAudioTrack(null) }
+            )
         }
         2 -> {
             Button(
@@ -413,14 +518,15 @@ private fun TrackSelectionRow(
     subtitle: String,
     selected: Boolean,
     badge: String,
-    onClick: () -> Unit
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier
 ) {
     Surface(
         onClick = onClick,
         shape = RoundedCornerShape(12.dp),
         color = if (selected) CinemaAmber.copy(alpha = 0.14f) else WarmObsidianContainer,
         border = BorderStroke(1.dp, if (selected) CinemaAmber else WarmBorder),
-        modifier = Modifier.fillMaxWidth()
+        modifier = modifier.fillMaxWidth()
     ) {
         Row(
             modifier = Modifier

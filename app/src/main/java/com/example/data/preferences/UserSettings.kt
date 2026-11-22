@@ -12,9 +12,12 @@ import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import com.example.data.model.AppThemeMode
 import com.example.data.model.AspectRatioMode
+import com.example.data.model.DecoderMode
 import com.example.data.model.EqPreset
 import com.example.data.model.PlayerOrientationMode
+import com.example.data.model.SeekPrecisionMode
 import com.example.data.model.SubtitleEdgeStyle
+import com.example.data.model.UserAgentProfile
 import com.example.data.model.VideoSortOption
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
@@ -22,7 +25,8 @@ import kotlinx.coroutines.flow.map
 private val Context.lumaDataStore: DataStore<Preferences> by preferencesDataStore(name = "luma_player_prefs")
 
 data class UserSettings(
-    val themeMode: AppThemeMode = AppThemeMode.AMOLED_DARK,
+    // v2.0 default: Crisp Light (user can switch to AMOLED Dark or System Default anytime)
+    val themeMode: AppThemeMode = AppThemeMode.LIGHT,
     val defaultAspectRatio: AspectRatioMode = AspectRatioMode.FIT,
     val defaultOrientation: PlayerOrientationMode = PlayerOrientationMode.AUTO_VIDEO,
     val videoSortOption: VideoSortOption = VideoSortOption.DATE_DESC,
@@ -46,7 +50,38 @@ data class UserSettings(
     val eqEnabled: Boolean = false,
     val eqPreset: EqPreset = EqPreset.FLAT,
     val eqBandLevelsMillibels: List<Int> = listOf(0, 0, 0, 0, 0),
-    val audioBoostPercent: Int = 0
+    val audioBoostPercent: Int = 0,
+
+    // Advanced Settings — 1. Network Buffer & Seek Engine
+    val seekPrecisionMode: SeekPrecisionMode = SeekPrecisionMode.CLOSEST_SYNC,
+    val minBufferSeconds: Int = 15,
+    val maxBufferSeconds: Int = 60,
+    val backBufferSeconds: Int = 30,
+    val forceIdentityEncoding: Boolean = true,
+    val enableCbrSeeking: Boolean = true,
+    val networkTimeoutSeconds: Int = 25,
+    val userAgentProfile: UserAgentProfile = UserAgentProfile.CHROME_MOBILE,
+    val customUserAgent: String = "",
+
+    // Advanced Settings — 2. Decoder & HDR Pipeline
+    val decoderMode: DecoderMode = DecoderMode.AUTO_HW_FALLBACK,
+    val hdrWindowEnabled: Boolean = true,
+    val enableTunneling: Boolean = false,
+    val maxStreamHeightPx: Int = 0, // 0 = Unlimited (Original Max / 4K / 8K)
+
+    // Advanced Settings — 3. Audio & Subtitle Language Rules
+    val preferredAudioLanguage: String = "",
+    val preferredSubtitleLanguage: String = "",
+    val autoLoadSiblingSubtitles: Boolean = true,
+    val skipSilenceEnabled: Boolean = false,
+    val pauseOnHeadphonesUnplugged: Boolean = true,
+
+    // Advanced Settings — 4. Player Skin, Auto-Hide & Cache
+    val hudAutoHideSeconds: Int = 4,
+    val showHudClockAndBattery: Boolean = true,
+    val showHudNetworkStats: Boolean = false,
+    val doubleTapZoneWide: Boolean = true,
+    val streamCacheSizeMb: Int = 256
 )
 
 class PreferencesRepository(private val context: Context) {
@@ -77,6 +112,34 @@ class PreferencesRepository(private val context: Context) {
         val EQ_PRESET = stringPreferencesKey("eq_preset")
         val EQ_BANDS = stringPreferencesKey("eq_bands")
         val AUDIO_BOOST = intPreferencesKey("audio_boost")
+
+        // Advanced Settings keys
+        val SEEK_PRECISION = stringPreferencesKey("adv_seek_precision")
+        val MIN_BUFFER_SEC = intPreferencesKey("adv_min_buffer_sec")
+        val MAX_BUFFER_SEC = intPreferencesKey("adv_max_buffer_sec")
+        val BACK_BUFFER_SEC = intPreferencesKey("adv_back_buffer_sec")
+        val FORCE_IDENTITY_ENCODING = booleanPreferencesKey("adv_force_identity_encoding")
+        val ENABLE_CBR_SEEKING = booleanPreferencesKey("adv_enable_cbr_seeking")
+        val NETWORK_TIMEOUT_SEC = intPreferencesKey("adv_network_timeout_sec")
+        val USER_AGENT_PROFILE = stringPreferencesKey("adv_user_agent_profile")
+        val CUSTOM_USER_AGENT = stringPreferencesKey("adv_custom_user_agent")
+
+        val DECODER_MODE = stringPreferencesKey("adv_decoder_mode")
+        val HDR_WINDOW_ENABLED = booleanPreferencesKey("adv_hdr_window_enabled")
+        val ENABLE_TUNNELING = booleanPreferencesKey("adv_enable_tunneling")
+        val MAX_STREAM_HEIGHT_PX = intPreferencesKey("adv_max_stream_height_px")
+
+        val PREFERRED_AUDIO_LANG = stringPreferencesKey("adv_preferred_audio_lang")
+        val PREFERRED_SUB_LANG = stringPreferencesKey("adv_preferred_sub_lang")
+        val AUTO_LOAD_SIBLING_SUBS = booleanPreferencesKey("adv_auto_load_sibling_subs")
+        val SKIP_SILENCE = booleanPreferencesKey("adv_skip_silence")
+        val PAUSE_ON_NOISY = booleanPreferencesKey("adv_pause_on_noisy")
+
+        val HUD_AUTO_HIDE_SEC = intPreferencesKey("adv_hud_auto_hide_sec")
+        val SHOW_HUD_CLOCK_BATTERY = booleanPreferencesKey("adv_show_hud_clock_battery")
+        val SHOW_HUD_NET_STATS = booleanPreferencesKey("adv_show_hud_net_stats")
+        val DOUBLE_TAP_ZONE_WIDE = booleanPreferencesKey("adv_double_tap_zone_wide")
+        val STREAM_CACHE_MB = intPreferencesKey("adv_stream_cache_mb")
     }
 
     val settingsFlow: Flow<UserSettings> = context.lumaDataStore.data.map { prefs ->
@@ -84,9 +147,12 @@ class PreferencesRepository(private val context: Context) {
         val parsedBands = bandsRaw?.split(",")?.mapNotNull { it.toIntOrNull() }
             ?.takeIf { it.size == 5 } ?: listOf(0, 0, 0, 0, 0)
 
+        val minBuf = (prefs[Keys.MIN_BUFFER_SEC] ?: 15).coerceIn(5, 60)
+        val maxBuf = (prefs[Keys.MAX_BUFFER_SEC] ?: 60).coerceIn(maxOf(minBuf + 5, 15), 180)
+
         UserSettings(
             themeMode = prefs[Keys.THEME_MODE]?.let { runCatching { AppThemeMode.valueOf(it) }.getOrNull() }
-                ?: AppThemeMode.AMOLED_DARK,
+                ?: AppThemeMode.LIGHT,
             defaultAspectRatio = prefs[Keys.DEFAULT_ASPECT]?.let { runCatching { AspectRatioMode.valueOf(it) }.getOrNull() }
                 ?: AspectRatioMode.FIT,
             defaultOrientation = prefs[Keys.DEFAULT_ORIENTATION]?.let { runCatching { PlayerOrientationMode.valueOf(it) }.getOrNull() }
@@ -115,7 +181,37 @@ class PreferencesRepository(private val context: Context) {
             eqPreset = prefs[Keys.EQ_PRESET]?.let { runCatching { EqPreset.valueOf(it) }.getOrNull() }
                 ?: EqPreset.FLAT,
             eqBandLevelsMillibels = parsedBands,
-            audioBoostPercent = prefs[Keys.AUDIO_BOOST] ?: 0
+            audioBoostPercent = prefs[Keys.AUDIO_BOOST] ?: 0,
+
+            seekPrecisionMode = prefs[Keys.SEEK_PRECISION]?.let { runCatching { SeekPrecisionMode.valueOf(it) }.getOrNull() }
+                ?: SeekPrecisionMode.CLOSEST_SYNC,
+            minBufferSeconds = minBuf,
+            maxBufferSeconds = maxBuf,
+            backBufferSeconds = (prefs[Keys.BACK_BUFFER_SEC] ?: 30).coerceIn(0, 120),
+            forceIdentityEncoding = prefs[Keys.FORCE_IDENTITY_ENCODING] ?: true,
+            enableCbrSeeking = prefs[Keys.ENABLE_CBR_SEEKING] ?: true,
+            networkTimeoutSeconds = (prefs[Keys.NETWORK_TIMEOUT_SEC] ?: 25).coerceIn(10, 60),
+            userAgentProfile = prefs[Keys.USER_AGENT_PROFILE]?.let { runCatching { UserAgentProfile.valueOf(it) }.getOrNull() }
+                ?: UserAgentProfile.CHROME_MOBILE,
+            customUserAgent = prefs[Keys.CUSTOM_USER_AGENT] ?: "",
+
+            decoderMode = prefs[Keys.DECODER_MODE]?.let { runCatching { DecoderMode.valueOf(it) }.getOrNull() }
+                ?: DecoderMode.AUTO_HW_FALLBACK,
+            hdrWindowEnabled = prefs[Keys.HDR_WINDOW_ENABLED] ?: true,
+            enableTunneling = prefs[Keys.ENABLE_TUNNELING] ?: false,
+            maxStreamHeightPx = prefs[Keys.MAX_STREAM_HEIGHT_PX] ?: 0,
+
+            preferredAudioLanguage = prefs[Keys.PREFERRED_AUDIO_LANG] ?: "",
+            preferredSubtitleLanguage = prefs[Keys.PREFERRED_SUB_LANG] ?: "",
+            autoLoadSiblingSubtitles = prefs[Keys.AUTO_LOAD_SIBLING_SUBS] ?: true,
+            skipSilenceEnabled = prefs[Keys.SKIP_SILENCE] ?: false,
+            pauseOnHeadphonesUnplugged = prefs[Keys.PAUSE_ON_NOISY] ?: true,
+
+            hudAutoHideSeconds = (prefs[Keys.HUD_AUTO_HIDE_SEC] ?: 4).coerceIn(2, 10),
+            showHudClockAndBattery = prefs[Keys.SHOW_HUD_CLOCK_BATTERY] ?: true,
+            showHudNetworkStats = prefs[Keys.SHOW_HUD_NET_STATS] ?: false,
+            doubleTapZoneWide = prefs[Keys.DOUBLE_TAP_ZONE_WIDE] ?: true,
+            streamCacheSizeMb = prefs[Keys.STREAM_CACHE_MB] ?: 256
         )
     }
 
@@ -199,5 +295,82 @@ class PreferencesRepository(private val context: Context) {
             bands?.let { prefs[Keys.EQ_BANDS] = it.joinToString(",") }
             boostPercent?.let { prefs[Keys.AUDIO_BOOST] = it.coerceIn(0, 200) }
         }
+    }
+
+    suspend fun updateAdvancedNetworkSettings(
+        seekPrecisionMode: SeekPrecisionMode? = null,
+        minBufferSeconds: Int? = null,
+        maxBufferSeconds: Int? = null,
+        backBufferSeconds: Int? = null,
+        forceIdentityEncoding: Boolean? = null,
+        enableCbrSeeking: Boolean? = null,
+        networkTimeoutSeconds: Int? = null,
+        userAgentProfile: UserAgentProfile? = null,
+        customUserAgent: String? = null
+    ) {
+        context.lumaDataStore.edit { prefs ->
+            seekPrecisionMode?.let { prefs[Keys.SEEK_PRECISION] = it.name }
+            minBufferSeconds?.let { prefs[Keys.MIN_BUFFER_SEC] = it.coerceIn(5, 60) }
+            maxBufferSeconds?.let { prefs[Keys.MAX_BUFFER_SEC] = it.coerceIn(15, 180) }
+            backBufferSeconds?.let { prefs[Keys.BACK_BUFFER_SEC] = it.coerceIn(0, 120) }
+            forceIdentityEncoding?.let { prefs[Keys.FORCE_IDENTITY_ENCODING] = it }
+            enableCbrSeeking?.let { prefs[Keys.ENABLE_CBR_SEEKING] = it }
+            networkTimeoutSeconds?.let { prefs[Keys.NETWORK_TIMEOUT_SEC] = it.coerceIn(10, 60) }
+            userAgentProfile?.let { prefs[Keys.USER_AGENT_PROFILE] = it.name }
+            customUserAgent?.let { prefs[Keys.CUSTOM_USER_AGENT] = it }
+        }
+    }
+
+    suspend fun updateAdvancedDecoderSettings(
+        decoderMode: DecoderMode? = null,
+        hdrWindowEnabled: Boolean? = null,
+        enableTunneling: Boolean? = null,
+        maxStreamHeightPx: Int? = null
+    ) {
+        context.lumaDataStore.edit { prefs ->
+            decoderMode?.let {
+                prefs[Keys.DECODER_MODE] = it.name
+                prefs[Keys.PREFER_HW] = (it != DecoderMode.PREFER_SOFTWARE)
+            }
+            hdrWindowEnabled?.let { prefs[Keys.HDR_WINDOW_ENABLED] = it }
+            enableTunneling?.let { prefs[Keys.ENABLE_TUNNELING] = it }
+            maxStreamHeightPx?.let { prefs[Keys.MAX_STREAM_HEIGHT_PX] = it.coerceAtLeast(0) }
+        }
+    }
+
+    suspend fun updateAdvancedLanguageSettings(
+        preferredAudioLanguage: String? = null,
+        preferredSubtitleLanguage: String? = null,
+        autoLoadSiblingSubtitles: Boolean? = null,
+        skipSilenceEnabled: Boolean? = null,
+        pauseOnHeadphonesUnplugged: Boolean? = null
+    ) {
+        context.lumaDataStore.edit { prefs ->
+            preferredAudioLanguage?.let { prefs[Keys.PREFERRED_AUDIO_LANG] = it }
+            preferredSubtitleLanguage?.let { prefs[Keys.PREFERRED_SUB_LANG] = it }
+            autoLoadSiblingSubtitles?.let { prefs[Keys.AUTO_LOAD_SIBLING_SUBS] = it }
+            skipSilenceEnabled?.let { prefs[Keys.SKIP_SILENCE] = it }
+            pauseOnHeadphonesUnplugged?.let { prefs[Keys.PAUSE_ON_NOISY] = it }
+        }
+    }
+
+    suspend fun updateAdvancedSkinAndCacheSettings(
+        hudAutoHideSeconds: Int? = null,
+        showHudClockAndBattery: Boolean? = null,
+        showHudNetworkStats: Boolean? = null,
+        doubleTapZoneWide: Boolean? = null,
+        streamCacheSizeMb: Int? = null
+    ) {
+        context.lumaDataStore.edit { prefs ->
+            hudAutoHideSeconds?.let { prefs[Keys.HUD_AUTO_HIDE_SEC] = it.coerceIn(2, 10) }
+            showHudClockAndBattery?.let { prefs[Keys.SHOW_HUD_CLOCK_BATTERY] = it }
+            showHudNetworkStats?.let { prefs[Keys.SHOW_HUD_NET_STATS] = it }
+            doubleTapZoneWide?.let { prefs[Keys.DOUBLE_TAP_ZONE_WIDE] = it }
+            streamCacheSizeMb?.let { prefs[Keys.STREAM_CACHE_MB] = it.coerceIn(0, 1024) }
+        }
+    }
+
+    suspend fun resetAllToDefaults() {
+        context.lumaDataStore.edit { it.clear() }
     }
 }

@@ -4,8 +4,8 @@ import java.util.Locale
 import kotlin.math.abs
 
 enum class AppThemeMode(val label: String) {
-    AMOLED_DARK("AMOLED Dark"),
     LIGHT("Crisp Light"),
+    AMOLED_DARK("AMOLED Dark"),
     SYSTEM("System Default")
 }
 
@@ -59,6 +59,55 @@ enum class PlayerOrientationMode(val label: String) {
     SENSOR("Auto Sensor")
 }
 
+enum class SeekPrecisionMode(val label: String, val description: String) {
+    CLOSEST_SYNC("Fast Keyframe", "Instant jump to nearest keyframe (best for online streams)"),
+    PREVIOUS_SYNC("Previous Keyframe", "Snaps cleanly to preceding keyframe before target"),
+    EXACT("Frame-Exact", "Highest accuracy, may take slightly longer on online streams")
+}
+
+enum class DecoderMode(val label: String, val description: String) {
+    AUTO_HW_FALLBACK("Auto (HW + SW Fallback)", "Hardware MediaCodec with automatic software recovery"),
+    PREFER_HARDWARE("Hardware Only (HW)", "Maximum battery efficiency & native HDR pass-through"),
+    PREFER_SOFTWARE("Prefer Software (SW)", "Compatibility mode for unusual codecs or broken drivers")
+}
+
+enum class UserAgentProfile(val label: String, val userAgentValue: String) {
+    CHROME_MOBILE(
+        "Chrome Mobile (Recommended)",
+        "Mozilla/5.0 (Linux; Android 14; Pixel 8 Pro) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Mobile Safari/537.36"
+    ),
+    EXOPLAYER_DEFAULT(
+        "Media3 / ExoPlayer",
+        "AndroidXMedia3/1.5.1 (Linux; Android 14) LumaPlayer/2.0"
+    ),
+    VLC_COMPAT(
+        "VLC Compatible",
+        "VLC/3.0.21 LibVLC/3.0.21"
+    ),
+    CUSTOM(
+        "Custom User-Agent",
+        ""
+    )
+}
+
+data class LanguageChoice(val code: String, val label: String)
+
+val LUMA_LANGUAGE_CHOICES: List<LanguageChoice> = listOf(
+    LanguageChoice("", "Auto / Original"),
+    LanguageChoice("en", "English"),
+    LanguageChoice("hi", "Hindi"),
+    LanguageChoice("bn", "Bengali"),
+    LanguageChoice("es", "Spanish"),
+    LanguageChoice("ja", "Japanese"),
+    LanguageChoice("ko", "Korean"),
+    LanguageChoice("ar", "Arabic"),
+    LanguageChoice("fr", "French"),
+    LanguageChoice("de", "German"),
+    LanguageChoice("ta", "Tamil"),
+    LanguageChoice("te", "Telugu"),
+    LanguageChoice("ur", "Urdu")
+)
+
 data class PlaybackQueueItem(
     val uri: String,
     val title: String,
@@ -103,6 +152,7 @@ data class AudioTrackOption(
     val trackIndex: Int,
     val label: String,
     val language: String,
+    val languageDisplayName: String,
     val codec: String,
     val channels: Int,
     val sampleRateHz: Int,
@@ -116,6 +166,7 @@ data class SubtitleTrackOption(
     val trackIndex: Int,
     val label: String,
     val language: String,
+    val languageDisplayName: String,
     val mimeType: String,
     val isSelected: Boolean
 )
@@ -213,5 +264,69 @@ object FormatUtils {
         6 -> "5.1 Surround"
         8 -> "7.1 Surround"
         else -> if (channels > 0) "${channels}ch" else "—"
+    }
+
+    fun decodeLanguageName(rawCode: String?): String {
+        val clean = rawCode?.trim()?.lowercase(Locale.US).orEmpty()
+        if (clean.isBlank() || clean == "und" || clean == "unknown" || clean == "zxx") {
+            return "Original"
+        }
+        val normalized = clean.replace('_', '-')
+        val primary = normalized.substringBefore('-')
+        val mapped = when (primary) {
+            "en", "eng" -> "English"
+            "hi", "hin" -> "Hindi"
+            "bn", "ben" -> "Bengali"
+            "es", "spa" -> "Spanish"
+            "ja", "jpn" -> "Japanese"
+            "ko", "kor" -> "Korean"
+            "ar", "ara" -> "Arabic"
+            "fr", "fra", "fre" -> "French"
+            "de", "deu", "ger" -> "German"
+            "ta", "tam" -> "Tamil"
+            "te", "tel" -> "Telugu"
+            "ur", "urd" -> "Urdu"
+            "pt", "por" -> "Portuguese"
+            "ru", "rus" -> "Russian"
+            "it", "ita" -> "Italian"
+            "zh", "zho", "chi" -> "Chinese"
+            "tr", "tur" -> "Turkish"
+            "id", "ind" -> "Indonesian"
+            "ml", "mal" -> "Malayalam"
+            "mr", "mar" -> "Marathi"
+            "pa", "pan" -> "Punjabi"
+            else -> null
+        }
+        if (mapped != null) return mapped
+        val locale = Locale.forLanguageTag(normalized)
+        val display = locale.getDisplayLanguage(Locale.ENGLISH)
+        return if (display.isNotBlank() && !display.equals(normalized, ignoreCase = true)) {
+            display.replaceFirstChar { it.uppercaseChar() }
+        } else {
+            primary.uppercase(Locale.US)
+        }
+    }
+
+    fun shortLanguageCode(rawCode: String?): String {
+        val clean = rawCode?.trim()?.lowercase(Locale.US).orEmpty()
+        if (clean.isBlank() || clean == "und" || clean == "unknown" || clean == "zxx") {
+            return "AUD"
+        }
+        val primary = clean.replace('_', '-').substringBefore('-')
+        return when (primary) {
+            "en", "eng" -> "ENG"
+            "hi", "hin" -> "HIN"
+            "bn", "ben" -> "BEN"
+            "es", "spa" -> "SPA"
+            "ja", "jpn" -> "JPN"
+            "ko", "kor" -> "KOR"
+            "ar", "ara" -> "ARA"
+            "fr", "fra", "fre" -> "FRA"
+            "de", "deu", "ger" -> "GER"
+            "ta", "tam" -> "TAM"
+            "te", "tel" -> "TEL"
+            "ur", "urd" -> "URD"
+            else -> primary.take(3).uppercase(Locale.US)
+        }
     }
 }

@@ -1,6 +1,6 @@
 {
   "name": "Luma Player",
-  "description": "High-fidelity, privacy-first Android video player with native HDR/4K/120fps playback, MX-style gestures, audio FX, subtitles, PiP, background playback, and adaptive streaming.",
+  "description": "High-fidelity, privacy-first Android video player v2.0 with native HDR/4K/120fps playback, multi-language audio, gesture controls, audio FX, subtitles, PiP, background playback, and adaptive streaming.",
   "requestFramePermissions": [],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }

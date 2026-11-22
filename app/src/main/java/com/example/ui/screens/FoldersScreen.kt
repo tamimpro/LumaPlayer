@@ -43,6 +43,7 @@ import com.example.ui.components.NoLocalVideosHero
 import com.example.ui.components.StoragePermissionHero
 import com.example.ui.components.VideoThumbnailBox
 import com.example.ui.theme.LumaMonoStyle
+import com.example.ui.theme.lumaPressScale
 
 @Composable
 fun FoldersScreen(
@@ -136,7 +137,8 @@ fun FoldersScreen(
                     itemsIndexed(continueWatching.take(8), key = { _, v -> v.uri }) { index, video ->
                         ContinueWatchingCard(
                             video = video,
-                            onClick = { onResumeVideo(continueWatching, index) }
+                            onClick = { onResumeVideo(continueWatching, index) },
+                            modifier = Modifier.animateItem()
                         )
                     }
                 }
@@ -188,7 +190,8 @@ fun FoldersScreen(
             items(folders, key = { it.folderUri }) { folder ->
                 FolderCard(
                     folder = folder,
-                    onClick = { onOpenFolder(folder) }
+                    onClick = { onOpenFolder(folder) },
+                    modifier = Modifier.animateItem()
                 )
             }
         }
@@ -198,15 +201,17 @@ fun FoldersScreen(
 @Composable
 private fun ContinueWatchingCard(
     video: VideoItemEntity,
-    onClick: () -> Unit
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier
 ) {
     Surface(
         onClick = onClick,
         shape = RoundedCornerShape(16.dp),
         color = MaterialTheme.colorScheme.surfaceContainer,
         border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
-        modifier = Modifier
+        modifier = modifier
             .width(216.dp)
+            .lumaPressScale(0.98f)
             .testTag("continue_watching_card")
     ) {
         Column {

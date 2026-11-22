@@ -44,6 +44,7 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
 import com.example.data.local.PlaylistWithCount
 import com.example.ui.theme.LumaMonoStyle
+import com.example.ui.theme.lumaPressScale
 
 @Composable
 fun PlaylistsScreen(
@@ -161,6 +162,8 @@ fun PlaylistsScreen(
                     border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
                     modifier = Modifier
                         .fillMaxWidth()
+                        .animateItem()
+                        .lumaPressScale(0.985f)
                         .testTag("playlist_card_${playlist.id}")
                 ) {
                     Row(
@@ -242,7 +245,7 @@ private fun SmartCollectionCard(
         shape = RoundedCornerShape(18.dp),
         color = MaterialTheme.colorScheme.surfaceContainer,
         border = BorderStroke(1.dp, accent.copy(alpha = 0.35f)),
-        modifier = modifier
+        modifier = modifier.lumaPressScale(0.98f)
     ) {
         Column(modifier = Modifier.padding(16.dp)) {
             Icon(icon, contentDescription = title, tint = accent, modifier = Modifier.size(26.dp))

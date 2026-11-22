@@ -87,6 +87,7 @@ import com.example.ui.theme.HdrGold
 import com.example.ui.theme.HwDecodeGreen
 import com.example.ui.theme.LumaMonoStyle
 import com.example.ui.theme.WarmObsidianLow
+import com.example.ui.theme.lumaPressScale
 import java.io.File
 
 @Composable
@@ -129,8 +130,11 @@ fun VideoThumbnailBox(
     val request = remember(uri) {
         ImageRequest.Builder(context)
             .data(Uri.parse(uri))
+            .size(320, 180)
+            .memoryCacheKey("thumb_v2_$uri")
+            .diskCacheKey("thumb_v2_$uri")
             .videoFrameMillis(2_000L)
-            .crossfade(true)
+            .crossfade(160)
             .build()
     }
 
@@ -242,6 +246,7 @@ fun VideoListRowCard(
         border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
         modifier = modifier
             .fillMaxWidth()
+            .lumaPressScale(0.985f)
             .testTag("video_card_${video.title.take(12)}")
     ) {
         Row(
@@ -417,6 +422,7 @@ fun FolderCard(
         border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
         modifier = modifier
             .fillMaxWidth()
+            .lumaPressScale(0.985f)
             .testTag("folder_card_${folder.folderName.take(12)}")
     ) {
         Row(
@@ -434,12 +440,18 @@ fun FolderCard(
             ) {
                 if (folder.previewThumbnailUri != null) {
                     val context = LocalContext.current
-                    AsyncImage(
-                        model = ImageRequest.Builder(context)
+                    val previewRequest = remember(folder.previewThumbnailUri) {
+                        ImageRequest.Builder(context)
                             .data(Uri.parse(folder.previewThumbnailUri))
+                            .size(240, 160)
+                            .memoryCacheKey("folder_v2_${folder.previewThumbnailUri}")
+                            .diskCacheKey("folder_v2_${folder.previewThumbnailUri}")
                             .videoFrameMillis(2_000L)
-                            .crossfade(true)
-                            .build(),
+                            .crossfade(160)
+                            .build()
+                    }
+                    AsyncImage(
+                        model = previewRequest,
                         contentDescription = null,
                         contentScale = ContentScale.Crop,
                         modifier = Modifier.fillMaxSize()

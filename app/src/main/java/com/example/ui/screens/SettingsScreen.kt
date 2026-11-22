@@ -21,9 +21,11 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
+import androidx.compose.material.icons.automirrored.rounded.KeyboardArrowRight
 import androidx.compose.material.icons.rounded.AdminPanelSettings
 import androidx.compose.material.icons.rounded.CheckCircle
 import androidx.compose.material.icons.rounded.Refresh
+import androidx.compose.material.icons.rounded.Tune
 import androidx.compose.material3.Button
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
@@ -46,6 +48,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
+import com.example.BuildConfig
 import com.example.data.model.AppThemeMode
 import com.example.data.model.AspectRatioMode
 import com.example.data.model.PlayerOrientationMode
@@ -55,6 +58,7 @@ import com.example.data.repository.StorageAccessState
 import com.example.ui.theme.BoostAmber
 import com.example.ui.theme.HwDecodeGreen
 import com.example.ui.theme.LumaMonoStyle
+import com.example.ui.theme.lumaPressScale
 import com.example.ui.viewmodel.MainViewModel
 import java.util.Locale
 
@@ -66,6 +70,7 @@ fun SettingsScreen(
     viewModel: MainViewModel,
     onRequestAllFilesAccess: () -> Unit,
     onRequestVideoAccess: () -> Unit,
+    onOpenAdvancedSettings: () -> Unit,
     onBack: () -> Unit
 ) {
     val context = LocalContext.current
@@ -73,7 +78,7 @@ fun SettingsScreen(
 
     Column(modifier = Modifier.fillMaxSize()) {
         TopAppBar(
-            title = { Text("Settings & Gestures") },
+            title = { Text("Settings") },
             navigationIcon = {
                 IconButton(
                     onClick = onBack,
@@ -92,6 +97,58 @@ fun SettingsScreen(
             contentPadding = PaddingValues(horizontal = 16.dp, vertical = 10.dp),
             verticalArrangement = Arrangement.spacedBy(14.dp)
         ) {
+            // Advanced Settings Power-User Hub Card
+            item {
+                Surface(
+                    onClick = onOpenAdvancedSettings,
+                    shape = RoundedCornerShape(18.dp),
+                    color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.55f),
+                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.45f)),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .lumaPressScale()
+                        .testTag("open_advanced_settings_button")
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(16.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Surface(
+                            shape = RoundedCornerShape(12.dp),
+                            color = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.size(44.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Rounded.Tune,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.onPrimary,
+                                modifier = Modifier.padding(10.dp)
+                            )
+                        }
+                        Spacer(modifier = Modifier.width(14.dp))
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = "Advanced Settings",
+                                style = MaterialTheme.typography.titleMedium,
+                                color = MaterialTheme.colorScheme.onSurface
+                            )
+                            Text(
+                                text = "Network buffers, seek engine, HW/SW decoders, audio/sub language rules & cache",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                        Icon(
+                            imageVector = Icons.AutoMirrored.Rounded.KeyboardArrowRight,
+                            contentDescription = "Open Advanced Settings",
+                            tint = MaterialTheme.colorScheme.primary
+                        )
+                    }
+                }
+            }
+
             // File Access & Storage Control Card
             item {
                 SettingsSectionCard(title = "File & Storage Access") {
@@ -275,9 +332,9 @@ fun SettingsScreen(
                 }
             }
 
-            // MX Player-Style Gesture Customizer
+            // Touch & Gesture Customizer
             item {
-                SettingsSectionCard(title = "MX-Style Gesture Controls") {
+                SettingsSectionCard(title = "Gesture Controls") {
                     SettingsToggleRow(
                         title = "Left-Side Brightness Swipe",
                         subtitle = "Slide vertically on left half to adjust screen brightness",
@@ -368,15 +425,34 @@ fun SettingsScreen(
                 }
             }
 
-            // Privacy Guarantee
+            // About & Privacy Guarantee
             item {
-                SettingsSectionCard(title = "Privacy & Independence") {
+                SettingsSectionCard(title = "About Luma Player") {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text("Version", style = MaterialTheme.typography.titleSmall)
+                        Surface(
+                            shape = RoundedCornerShape(8.dp),
+                            color = MaterialTheme.colorScheme.primaryContainer
+                        ) {
+                            Text(
+                                text = "v${BuildConfig.VERSION_NAME}",
+                                style = LumaMonoStyle.copy(color = MaterialTheme.colorScheme.onPrimaryContainer),
+                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
+                            )
+                        }
+                    }
+                    Spacer(modifier = Modifier.height(8.dp))
                     Text(
                         "100% private on-device SQLite library & preferences. Zero ads, zero analytics, zero cloud tracking, and zero artificial video-quality restrictions.",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
+                Spacer(modifier = Modifier.height(12.dp))
             }
         }
     }

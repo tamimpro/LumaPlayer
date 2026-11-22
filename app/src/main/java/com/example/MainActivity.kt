@@ -14,6 +14,12 @@ import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.IntentSenderRequest
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.scaleIn
+import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Row
@@ -85,6 +91,7 @@ import com.example.ui.components.MoveVideoDialog
 import com.example.ui.components.RenameVideoDialog
 import com.example.ui.components.StorageAccessPromptDialog
 import com.example.ui.components.VideoInfoDialog
+import com.example.ui.screens.AdvancedSettingsScreen
 import com.example.ui.screens.CollectionDetailScreen
 import com.example.ui.screens.FoldersScreen
 import com.example.ui.screens.PlaylistNameDialog
@@ -92,6 +99,7 @@ import com.example.ui.screens.PlaylistsScreen
 import com.example.ui.screens.SettingsScreen
 import com.example.ui.screens.StreamScreen
 import com.example.ui.screens.VideosScreen
+import com.example.ui.theme.LumaMotion
 import com.example.ui.theme.LumaPlayerTheme
 import com.example.ui.viewmodel.MainViewModel
 
@@ -100,6 +108,7 @@ private const val ROUTE_VIDEOS = "videos"
 private const val ROUTE_PLAYLISTS = "playlists"
 private const val ROUTE_STREAM = "stream"
 private const val ROUTE_SETTINGS = "settings"
+private const val ROUTE_ADVANCED_SETTINGS = "advanced_settings"
 private const val ROUTE_FOLDER_DETAIL = "folder_detail/{folderUri}/{folderName}"
 private const val ROUTE_PLAYLIST_DETAIL = "playlist_detail/{playlistId}/{playlistName}"
 private const val ROUTE_FAVORITES_DETAIL = "favorites_detail"
@@ -329,14 +338,23 @@ private fun LumaMainApp(viewModel: MainViewModel) {
                                     onClick = { viewModel.cycleThemeQuick() },
                                     modifier = Modifier.testTag("theme_quick_toggle")
                                 ) {
-                                    Icon(
-                                        imageVector = if (settings.themeMode == AppThemeMode.LIGHT) {
-                                            Icons.Outlined.DarkMode
-                                        } else {
-                                            Icons.Outlined.LightMode
+                                    AnimatedContent(
+                                        targetState = settings.themeMode == AppThemeMode.LIGHT,
+                                        transitionSpec = {
+                                            (fadeIn(tween(150)) + scaleIn(tween(160), initialScale = 0.82f))
+                                                .togetherWith(fadeOut(tween(110)))
                                         },
-                                        contentDescription = "Switch theme"
-                                    )
+                                        label = "themeIconToggle"
+                                    ) { isLight ->
+                                        Icon(
+                                            imageVector = if (isLight) {
+                                                Icons.Outlined.DarkMode
+                                            } else {
+                                                Icons.Outlined.LightMode
+                                            },
+                                            contentDescription = "Switch theme"
+                                        )
+                                    }
                                 }
                                 IconButton(
                                     onClick = { navController.navigate(ROUTE_SETTINGS) },
@@ -402,11 +420,19 @@ private fun LumaMainApp(viewModel: MainViewModel) {
                     NavHost(
                         navController = navController,
                         startDestination = ROUTE_FOLDERS,
+                        enterTransition = { LumaMotion.screenEnter() },
+                        exitTransition = { LumaMotion.screenExit() },
+                        popEnterTransition = { LumaMotion.screenPopEnter() },
+                        popExitTransition = { LumaMotion.screenPopExit() },
                         modifier = Modifier
                             .fillMaxSize()
                             .widthIn(max = 840.dp)
                     ) {
-                        composable(ROUTE_FOLDERS) {
+                        composable(
+                            route = ROUTE_FOLDERS,
+                            enterTransition = { LumaMotion.tabEnter() },
+                            exitTransition = { LumaMotion.tabExit() }
+                        ) {
                             FoldersScreen(
                                 folders = folders,
                                 continueWatching = watchHistory,
@@ -425,7 +451,11 @@ private fun LumaMainApp(viewModel: MainViewModel) {
                             )
                         }
 
-                        composable(ROUTE_VIDEOS) {
+                        composable(
+                            route = ROUTE_VIDEOS,
+                            enterTransition = { LumaMotion.tabEnter() },
+                            exitTransition = { LumaMotion.tabExit() }
+                        ) {
                             VideosScreen(
                                 videos = filteredVideos,
                                 storageAccess = storageAccess,
@@ -449,7 +479,11 @@ private fun LumaMainApp(viewModel: MainViewModel) {
                             )
                         }
 
-                        composable(ROUTE_PLAYLISTS) {
+                        composable(
+                            route = ROUTE_PLAYLISTS,
+                            enterTransition = { LumaMotion.tabEnter() },
+                            exitTransition = { LumaMotion.tabExit() }
+                        ) {
                             PlaylistsScreen(
                                 playlists = playlists,
                                 favoritesCount = favoriteVideos.size,
@@ -466,7 +500,11 @@ private fun LumaMainApp(viewModel: MainViewModel) {
                             )
                         }
 
-                        composable(ROUTE_STREAM) {
+                        composable(
+                            route = ROUTE_STREAM,
+                            enterTransition = { LumaMotion.tabEnter() },
+                            exitTransition = { LumaMotion.tabExit() }
+                        ) {
                             StreamScreen(
                                 bookmarks = streamBookmarks,
                                 parseHeaders = viewModel::parseHeadersJson,
@@ -490,6 +528,15 @@ private fun LumaMainApp(viewModel: MainViewModel) {
                                 viewModel = viewModel,
                                 onRequestAllFilesAccess = { requestAllFilesAccess() },
                                 onRequestVideoAccess = { requestVideoReadAccess() },
+                                onOpenAdvancedSettings = { navController.navigate(ROUTE_ADVANCED_SETTINGS) },
+                                onBack = { navController.popBackStack() }
+                            )
+                        }
+
+                        composable(ROUTE_ADVANCED_SETTINGS) {
+                            AdvancedSettingsScreen(
+                                settings = settings,
+                                viewModel = viewModel,
                                 onBack = { navController.popBackStack() }
                             )
                         }

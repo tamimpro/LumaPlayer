@@ -100,6 +100,10 @@ class PlayerActivity : ComponentActivity() {
                 applyRequestedOrientation(uiState.orientationMode, uiState.videoWidth, uiState.videoHeight)
             }
 
+            LaunchedEffect(settings.hdrWindowEnabled) {
+                applyWindowHdrMode(settings.hdrWindowEnabled)
+            }
+
             LaunchedEffect(uiState.isPlaying, uiState.videoWidth, uiState.videoHeight, settings.autoEnterPip, backgroundPlayActive) {
                 updatePipParams(
                     videoWidth = uiState.videoWidth,
@@ -255,12 +259,20 @@ class PlayerActivity : ComponentActivity() {
                 layoutInDisplayCutoutMode = WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES
             }
         }
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            window.colorMode = ActivityInfo.COLOR_MODE_HDR
-        }
+        applyWindowHdrMode(viewModel.settings.value.hdrWindowEnabled)
         val controller = WindowCompat.getInsetsController(window, window.decorView)
         controller.systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
         controller.hide(WindowInsetsCompat.Type.systemBars())
+    }
+
+    private fun applyWindowHdrMode(enabled: Boolean) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            window.colorMode = if (enabled) {
+                ActivityInfo.COLOR_MODE_HDR
+            } else {
+                ActivityInfo.COLOR_MODE_DEFAULT
+            }
+        }
     }
 
     private fun inspectDisplayCapabilities() {
@@ -297,13 +309,23 @@ class PlayerActivity : ComponentActivity() {
         videoWidth: Int,
         videoHeight: Int
     ) {
-        requestedOrientation = when (mode) {
-            PlayerOrientationMode.LANDSCAPE -> ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
-            PlayerOrientationMode.REVERSE_LANDSCAPE -> ActivityInfo.SCREEN_ORIENTATION_REVERSE_LANDSCAPE
-            PlayerOrientationMode.PORTRAIT -> ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
-            PlayerOrientationMode.SENSOR -> ActivityInfo.SCREEN_ORIENTATION_FULL_SENSOR
+        when (mode) {
+            PlayerOrientationMode.LANDSCAPE -> {
+                requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
+            }
+            PlayerOrientationMode.REVERSE_LANDSCAPE -> {
+                requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_REVERSE_LANDSCAPE
+            }
+            PlayerOrientationMode.PORTRAIT -> {
+                requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
+            }
+            PlayerOrientationMode.SENSOR -> {
+                requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_FULL_SENSOR
+            }
             PlayerOrientationMode.AUTO_VIDEO -> {
-                if (videoWidth > 0 && videoHeight > 0 && videoHeight > videoWidth) {
+                // Wait until Media3 reports real decoded video dimensions so vertical videos never flash landscape
+                if (videoWidth <= 0 || videoHeight <= 0) return
+                requestedOrientation = if (videoHeight > videoWidth) {
                     ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
                 } else {
                     ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE

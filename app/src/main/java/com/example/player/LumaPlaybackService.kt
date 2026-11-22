@@ -17,7 +17,9 @@ import androidx.media3.common.Player
 import androidx.media3.common.Tracks
 import androidx.media3.common.text.CueGroup
 import androidx.media3.common.util.UnstableApi
+import androidx.media3.datasource.DataSource
 import androidx.media3.datasource.DefaultDataSource
+import androidx.media3.datasource.cache.CacheDataSource
 import androidx.media3.datasource.okhttp.OkHttpDataSource
 import androidx.media3.exoplayer.DecoderReuseEvaluation
 import androidx.media3.exoplayer.DefaultLoadControl
@@ -25,14 +27,20 @@ import androidx.media3.exoplayer.DefaultRenderersFactory
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.SeekParameters
 import androidx.media3.exoplayer.analytics.AnalyticsListener
+import androidx.media3.exoplayer.mediacodec.MediaCodecSelector
+import androidx.media3.exoplayer.mediacodec.MediaCodecUtil
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.exoplayer.trackselection.DefaultTrackSelector
+import androidx.media3.extractor.DefaultExtractorsFactory
 import androidx.media3.session.MediaSession
 import androidx.media3.session.MediaSessionService
 import com.example.LumaApplication
+import com.example.data.model.DecoderMode
 import com.example.data.model.PlaybackQueueItem
 import com.example.data.model.PlaybackRequest
+import com.example.data.model.SeekPrecisionMode
 import com.example.data.model.StreamProtocol
+import com.example.data.model.UserAgentProfile
 import com.example.data.model.VideoDiagnostics
 import com.example.data.preferences.UserSettings
 import kotlinx.coroutines.CoroutineScope
@@ -47,6 +55,18 @@ import java.util.concurrent.TimeUnit
 @OptIn(UnstableApi::class)
 class LumaPlaybackService : MediaSessionService() {
 
+    private data class EngineBuildKey(
+        val minBufferSec: Int,
+        val maxBufferSec: Int,
+        val backBufferSec: Int,
+        val decoderMode: DecoderMode
+    )
+
+    private data class HttpClientKey(
+        val timeoutSec: Int,
+        val forceIdentityEncoding: Boolean
+    )
+
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
 
     private var exoPlayer: ExoPlayer? = null
@@ -54,58 +74,79 @@ class LumaPlaybackService : MediaSessionService() {
     private var trackSelector: DefaultTrackSelector? = null
     private var currentQueue: List<PlaybackQueueItem> = emptyList()
     private var latestSettings: UserSettings = UserSettings()
+    private var activeEngineKey: EngineBuildKey? = null
+    private var activeHttpKey: HttpClientKey? = null
+    private var cachedOkHttpClient: OkHttpClient? = null
     private var totalDroppedFrames: Int = 0
-
-    private val okHttpClient: OkHttpClient by lazy {
-        OkHttpClient.Builder()
-            .followRedirects(true)
-            .followSslRedirects(true)
-            .connectTimeout(20, TimeUnit.SECONDS)
-            .readTimeout(30, TimeUnit.SECONDS)
-            .retryOnConnectionFailure(true)
-            .build()
-    }
 
     override fun onCreate() {
         super.onCreate()
         val app = application as LumaApplication
 
+        // Build initial engine with defaults immediately so service startup is instant
+        rebuildPlayerEngine(latestSettings)
+
         serviceScope.launch {
             app.preferencesRepository.settingsFlow.collect { settings ->
+                val prev = latestSettings
                 latestSettings = settings
                 PlayerSessionHolder.subtitleSyncController.setSyncOffsetMs(settings.subtitleSyncOffsetMs)
-                applyFrameRateStrategy(settings.matchDisplayFrameRate)
+                applyLiveSettingsToPlayer(settings)
+
+                // If core engine parameters changed while idle (nothing playing), rebuild proactively
+                val desiredKey = engineKeyFor(settings)
+                val player = exoPlayer
+                val isIdle = player == null ||
+                    (player.playbackState == Player.STATE_IDLE || player.playbackState == Player.STATE_ENDED) &&
+                    currentQueue.isEmpty()
+                if (desiredKey != activeEngineKey && isIdle) {
+                    rebuildPlayerEngine(settings)
+                } else if (prev.preferredAudioLanguage != settings.preferredAudioLanguage ||
+                    prev.preferredSubtitleLanguage != settings.preferredSubtitleLanguage ||
+                    prev.maxStreamHeightPx != settings.maxStreamHeightPx ||
+                    prev.enableTunneling != settings.enableTunneling
+                ) {
+                    applyTrackSelectorPreferences(settings, clearVideoOverride = false)
+                }
             }
         }
 
-        val selector = DefaultTrackSelector(this).apply {
-            setParameters(
-                buildUponParameters()
-                    // Preserve 100% original maximum quality & HDR capability supported by device hardware
-                    .setForceHighestSupportedBitrate(true)
-                    .setMaxVideoSize(Int.MAX_VALUE, Int.MAX_VALUE)
-                    .setMaxVideoBitrate(Int.MAX_VALUE)
-                    .setMaxVideoFrameRate(240)
-                    .setAllowVideoMixedMimeTypeAdaptiveness(true)
-                    .setAllowVideoNonSeamlessAdaptiveness(true)
-                    .setAllowAudioMixedMimeTypeAdaptiveness(true)
-                    .setExceedVideoConstraintsIfNecessary(false)
-                    .setExceedRendererCapabilitiesIfNecessary(false)
-            )
-        }
+        loadPendingRequestIfAny()
+    }
+
+    private fun engineKeyFor(settings: UserSettings): EngineBuildKey = EngineBuildKey(
+        minBufferSec = settings.minBufferSeconds,
+        maxBufferSec = settings.maxBufferSeconds,
+        backBufferSec = settings.backBufferSeconds,
+        decoderMode = settings.decoderMode
+    )
+
+    private fun rebuildPlayerEngine(settings: UserSettings) {
+        val oldPlayer = exoPlayer
+        oldPlayer?.removeListener(playerListener)
+        oldPlayer?.removeAnalyticsListener(analyticsListener)
+
+        val selector = DefaultTrackSelector(this)
         trackSelector = selector
+        applyTrackSelectorPreferences(settings, clearVideoOverride = true)
 
-        val renderersFactory = DefaultRenderersFactory(this)
-            .setExtensionRendererMode(DefaultRenderersFactory.EXTENSION_RENDERER_MODE_ON)
-            .setEnableDecoderFallback(true)
+        val renderersFactory = buildRenderersFactory(settings.decoderMode)
 
-        // Tuned buffer watermarks for smooth 4K/HDR/high-bitrate playback and fast buffering recovery
+        val minMs = (settings.minBufferSeconds * 1000).coerceIn(5_000, 60_000)
+        val maxMs = (settings.maxBufferSeconds * 1000).coerceIn(maxOf(minMs + 5_000, 15_000), 180_000)
+        val backMs = (settings.backBufferSeconds * 1000).coerceIn(0, 120_000)
+
+        // Configurable buffer watermarks + retained back-buffer for instant backward online skips
         val loadControl = DefaultLoadControl.Builder()
             .setBufferDurationsMs(
-                /* minBufferMs = */ 15_000,
-                /* maxBufferMs = */ 60_000,
-                /* bufferForPlaybackMs = */ 1_500,
-                /* bufferForPlaybackAfterRebufferMs = */ 3_000
+                /* minBufferMs = */ minMs,
+                /* maxBufferMs = */ maxMs,
+                /* bufferForPlaybackMs = */ 1_200,
+                /* bufferForPlaybackAfterRebufferMs = */ 2_500
+            )
+            .setBackBuffer(
+                /* backBufferDurationMs = */ backMs,
+                /* retainBackBufferFromKeyframe = */ true
             )
             .setPrioritizeTimeOverSizeThresholds(true)
             .build()
@@ -119,19 +160,19 @@ class LumaPlaybackService : MediaSessionService() {
             .setTrackSelector(selector)
             .setLoadControl(loadControl)
             .setAudioAttributes(audioAttributes, /* handleAudioFocus = */ true)
-            .setHandleAudioBecomingNoisy(true)
+            .setHandleAudioBecomingNoisy(settings.pauseOnHeadphonesUnplugged)
             .setWakeMode(C.WAKE_MODE_NETWORK)
             .setVideoScalingMode(C.VIDEO_SCALING_MODE_SCALE_TO_FIT)
             .build()
 
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-            player.videoChangeFrameRateStrategy = C.VIDEO_CHANGE_FRAME_RATE_STRATEGY_ONLY_IF_SEAMLESS
-        }
-
         player.addListener(playerListener)
         player.addAnalyticsListener(analyticsListener)
         exoPlayer = player
+        activeEngineKey = engineKeyFor(settings)
 
+        applyLiveSettingsToPlayer(settings)
+
+        // Update or create MediaSession cleanly
         val sessionIntent = Intent(this, PlayerActivity::class.java).apply {
             flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
         }
@@ -142,12 +183,82 @@ class LumaPlaybackService : MediaSessionService() {
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
 
-        mediaSession = MediaSession.Builder(this, player)
-            .setSessionActivity(pendingIntent)
-            .build()
+        val existingSession = mediaSession
+        if (existingSession != null) {
+            existingSession.player = player
+        } else {
+            mediaSession = MediaSession.Builder(this, player)
+                .setSessionActivity(pendingIntent)
+                .build()
+        }
 
+        oldPlayer?.release()
         PlayerSessionHolder.registerPlayer(this, player)
-        loadPendingRequestIfAny()
+    }
+
+    private fun buildRenderersFactory(decoderMode: DecoderMode): DefaultRenderersFactory {
+        val factory = DefaultRenderersFactory(this)
+        return when (decoderMode) {
+            DecoderMode.AUTO_HW_FALLBACK -> factory
+                .setExtensionRendererMode(DefaultRenderersFactory.EXTENSION_RENDERER_MODE_ON)
+                .setEnableDecoderFallback(true)
+            DecoderMode.PREFER_HARDWARE -> factory
+                .setExtensionRendererMode(DefaultRenderersFactory.EXTENSION_RENDERER_MODE_OFF)
+                .setEnableDecoderFallback(true)
+            DecoderMode.PREFER_SOFTWARE -> factory
+                .setExtensionRendererMode(DefaultRenderersFactory.EXTENSION_RENDERER_MODE_PREFER)
+                .setEnableDecoderFallback(true)
+                .setMediaCodecSelector(
+                    MediaCodecSelector { mimeType, requiresSecureDecoder, requiresTunnelingDecoder ->
+                        val infos = MediaCodecUtil.getDecoderInfos(
+                            mimeType,
+                            requiresSecureDecoder,
+                            requiresTunnelingDecoder
+                        )
+                        // Prioritize software decoders first while preserving hardware fallback
+                        infos.sortedByDescending { info ->
+                            info.softwareOnly ||
+                                info.name.contains("google", ignoreCase = true) ||
+                                info.name.contains("sw", ignoreCase = true)
+                        }
+                    }
+                )
+        }
+    }
+
+    private fun getOrBuildOkHttpClient(settings: UserSettings): OkHttpClient {
+        val key = HttpClientKey(
+            timeoutSec = settings.networkTimeoutSeconds,
+            forceIdentityEncoding = settings.forceIdentityEncoding
+        )
+        val existing = cachedOkHttpClient
+        if (existing != null && activeHttpKey == key) {
+            return existing
+        }
+        val timeout = settings.networkTimeoutSeconds.toLong().coerceIn(10L, 60L)
+        val builder = OkHttpClient.Builder()
+            .followRedirects(true)
+            .followSslRedirects(true)
+            .connectTimeout(timeout, TimeUnit.SECONDS)
+            .readTimeout(timeout, TimeUnit.SECONDS)
+            .retryOnConnectionFailure(true)
+
+        if (settings.forceIdentityEncoding) {
+            // Prevents OkHttp BridgeInterceptor from injecting Accept-Encoding: gzip, which causes
+            // many video hosts to omit Content-Length / Accept-Ranges and restart seeks from 00:00!
+            builder.addInterceptor { chain ->
+                val req = chain.request()
+                val updated = req.newBuilder()
+                    .header("Accept-Encoding", "identity")
+                    .build()
+                chain.proceed(updated)
+            }
+        }
+
+        return builder.build().also {
+            cachedOkHttpClient = it
+            activeHttpKey = key
+        }
     }
 
     override fun onGetSession(controllerInfo: MediaSession.ControllerInfo): MediaSession? {
@@ -187,8 +298,13 @@ class LumaPlaybackService : MediaSessionService() {
     }
 
     fun loadRequest(request: PlaybackRequest) {
-        val player = exoPlayer ?: return
         if (request.queue.isEmpty()) return
+
+        // Rebuild ExoPlayer cleanly if Advanced buffer/decoder settings changed since last playback
+        if (engineKeyFor(latestSettings) != activeEngineKey || exoPlayer == null) {
+            rebuildPlayerEngine(latestSettings)
+        }
+        val player = exoPlayer ?: return
 
         persistCurrentProgress()
         totalDroppedFrames = 0
@@ -201,27 +317,28 @@ class LumaPlaybackService : MediaSessionService() {
             )
         }
 
-        currentQueue = request.queue
-        val startIndex = request.startIndex.coerceIn(0, request.queue.lastIndex)
-        val activeItem = request.queue[startIndex]
+        // Respect autoLoadSiblingSubtitles preference for local videos
+        val effectiveQueue = if (latestSettings.autoLoadSiblingSubtitles) {
+            request.queue
+        } else {
+            request.queue.map { item -> if (!item.isStream) item.copy(subtitleUri = null) else item }
+        }
+
+        currentQueue = effectiveQueue
+        val startIndex = request.startIndex.coerceIn(0, effectiveQueue.lastIndex)
+        val activeItem = effectiveQueue[startIndex]
         PlayerSessionHolder.updateCurrentItem(activeItem)
         // Session-scoped opt-in: OFF by default unless explicitly launched for background audio
         PlayerSessionHolder.setBackgroundPlayActive(request.startInBackground)
-        applySeekParametersForItem(player, activeItem)
+        applySeekParameters(player, activeItem, latestSettings.seekPrecisionMode)
 
         val mergedHeaders = activeItem.headers
-        val mediaSources = request.queue.map { item ->
+        val mediaSources = effectiveQueue.map { item ->
             buildMediaSourceForItem(item, item.headers.ifEmpty { mergedHeaders })
         }
 
-        // Reset manual track overrides so each new video starts at maximum supported quality & HDR
-        trackSelector?.let { selector ->
-            selector.setParameters(
-                selector.buildUponParameters()
-                    .clearOverridesOfType(C.TRACK_TYPE_VIDEO)
-                    .setForceHighestSupportedBitrate(true)
-            )
-        }
+        // Apply preferred audio/subtitle languages, resolution cap, and reset manual video overrides
+        applyTrackSelectorPreferences(latestSettings, clearVideoOverride = true)
 
         val resumePos = if (latestSettings.autoResume && activeItem.resumePositionMs > 2_000L) {
             activeItem.resumePositionMs
@@ -238,7 +355,7 @@ class LumaPlaybackService : MediaSessionService() {
         val player = exoPlayer ?: return
         val index = player.currentMediaItemIndex
         val item = currentQueue.getOrNull(index) ?: return
-        val currentPos = player.currentPosition
+        val currentPos = player.currentPosition.coerceAtLeast(0L)
         val wasPlaying = player.playWhenReady
 
         val updatedItem = item.copy(subtitleUri = subtitleUri.toString())
@@ -248,8 +365,11 @@ class LumaPlaybackService : MediaSessionService() {
         currentQueue = updatedQueue
         PlayerSessionHolder.updateCurrentItem(updatedItem)
 
-        val newSource = buildMediaSourceForItem(updatedItem, updatedItem.headers)
-        player.setMediaSource(newSource, currentPos)
+        // Bug fix: Rebuild full queue so attaching a subtitle never discards the rest of the playlist
+        val mediaSources = updatedQueue.map { qItem ->
+            buildMediaSourceForItem(qItem, qItem.headers)
+        }
+        player.setMediaSources(mediaSources, index, currentPos)
         player.prepare()
         player.playWhenReady = wasPlaying
     }
@@ -258,9 +378,17 @@ class LumaPlaybackService : MediaSessionService() {
         val player = exoPlayer ?: return
         PlayerSessionHolder.setPlaybackError(null)
         val pos = player.currentPosition.coerceAtLeast(0L)
-        player.seekTo(pos)
-        player.prepare()
-        player.playWhenReady = true
+        if (currentQueue.isNotEmpty()) {
+            val idx = player.currentMediaItemIndex.coerceIn(0, currentQueue.lastIndex)
+            val sources = currentQueue.map { buildMediaSourceForItem(it, it.headers) }
+            player.setMediaSources(sources, idx, pos)
+            player.prepare()
+            player.playWhenReady = true
+        } else {
+            player.seekTo(pos)
+            player.prepare()
+            player.playWhenReady = true
+        }
     }
 
     fun getTrackSelector(): DefaultTrackSelector? = trackSelector
@@ -272,6 +400,8 @@ class LumaPlaybackService : MediaSessionService() {
             ?: return
         val pos = player.currentPosition.coerceAtLeast(0L)
         val dur = player.duration.takeIf { it != C.TIME_UNSET && it > 0L } ?: 0L
+        // Avoid overwriting saved resume progress if playback never got past initial buffering
+        if (pos < 1_500L && player.playbackState != Player.STATE_ENDED) return
         val app = application as LumaApplication
         serviceScope.launch(Dispatchers.IO) {
             app.libraryRepository.savePlaybackProgress(
@@ -284,21 +414,64 @@ class LumaPlaybackService : MediaSessionService() {
         }
     }
 
+    private fun resolveUserAgent(customHeaderUa: String?): String {
+        if (!customHeaderUa.isNullOrBlank()) return customHeaderUa
+        return when (latestSettings.userAgentProfile) {
+            UserAgentProfile.CUSTOM -> latestSettings.customUserAgent.trim()
+                .ifBlank { UserAgentProfile.CHROME_MOBILE.userAgentValue }
+            else -> latestSettings.userAgentProfile.userAgentValue
+        }
+    }
+
     private fun buildMediaSourceForItem(
         item: PlaybackQueueItem,
         headers: Map<String, String>
     ): androidx.media3.exoplayer.source.MediaSource {
-        val httpFactory = OkHttpDataSource.Factory(okHttpClient).apply {
-            val cleanHeaders = headers.filterKeys { it.isNotBlank() }.filterValues { it.isNotBlank() }
+        val client = getOrBuildOkHttpClient(latestSettings)
+        val cleanHeaders = headers
+            .filterKeys { it.isNotBlank() }
+            .filterValues { it.isNotBlank() }
+            .toMutableMap()
+
+        if (latestSettings.forceIdentityEncoding &&
+            cleanHeaders.keys.none { it.equals("Accept-Encoding", ignoreCase = true) }
+        ) {
+            cleanHeaders["Accept-Encoding"] = "identity"
+        }
+
+        val customUa = cleanHeaders.entries.firstOrNull { it.key.equals("User-Agent", ignoreCase = true) }?.value
+        val resolvedUa = resolveUserAgent(customUa)
+
+        val httpFactory = OkHttpDataSource.Factory(client).apply {
+            setUserAgent(resolvedUa)
             if (cleanHeaders.isNotEmpty()) {
                 setDefaultRequestProperties(cleanHeaders)
             }
-            val customUa = cleanHeaders.entries.firstOrNull { it.key.equals("User-Agent", ignoreCase = true) }?.value
-            setUserAgent(customUa ?: "LumaPlayer/1.0 (Android; Media3)")
         }
 
-        val dataSourceFactory = DefaultDataSource.Factory(this, httpFactory)
-        val mediaSourceFactory = DefaultMediaSourceFactory(dataSourceFactory)
+        // Layer 3: Wrap remote streams in LRU SimpleCache when enabled so backward/repeat seeks stay local
+        val upstreamFactory: DataSource.Factory = if (item.isStream && latestSettings.streamCacheSizeMb > 0) {
+            val cache = LumaStreamCache.getOrCreateCache(this, latestSettings.streamCacheSizeMb)
+            if (cache != null) {
+                CacheDataSource.Factory()
+                    .setCache(cache)
+                    .setUpstreamDataSourceFactory(httpFactory)
+                    .setFlags(CacheDataSource.FLAG_IGNORE_CACHE_ON_ERROR)
+            } else {
+                httpFactory
+            }
+        } else {
+            httpFactory
+        }
+
+        val dataSourceFactory = DefaultDataSource.Factory(this, upstreamFactory)
+
+        // Layer 2: Constant-bitrate seeking flags keep unindexed HTTP MP4/MKV/TS streams seekable!
+        val extractorsFactory = DefaultExtractorsFactory()
+            .setConstantBitrateSeekingEnabled(latestSettings.enableCbrSeeking)
+            .setConstantBitrateSeekingAlwaysEnabled(latestSettings.enableCbrSeeking)
+
+        val mediaSourceFactory = DefaultMediaSourceFactory(dataSourceFactory, extractorsFactory)
 
         val mediaItemBuilder = MediaItem.Builder()
             .setUri(Uri.parse(item.uri))
@@ -346,6 +519,63 @@ class LumaPlaybackService : MediaSessionService() {
         }
     }
 
+    private fun applyLiveSettingsToPlayer(settings: UserSettings) {
+        val player = exoPlayer ?: return
+        applyFrameRateStrategy(settings.matchDisplayFrameRate)
+        player.skipSilenceEnabled = settings.skipSilenceEnabled
+        player.setHandleAudioBecomingNoisy(settings.pauseOnHeadphonesUnplugged)
+        val activeItem = PlayerSessionHolder.currentItem.value
+        if (activeItem != null) {
+            applySeekParameters(player, activeItem, settings.seekPrecisionMode)
+        }
+    }
+
+    private fun applyTrackSelectorPreferences(
+        settings: UserSettings,
+        clearVideoOverride: Boolean
+    ) {
+        val selector = trackSelector ?: return
+        val builder = selector.buildUponParameters()
+            .setAllowVideoMixedMimeTypeAdaptiveness(true)
+            .setAllowVideoNonSeamlessAdaptiveness(true)
+            .setAllowAudioMixedMimeTypeAdaptiveness(true)
+            .setExceedVideoConstraintsIfNecessary(false)
+            .setExceedRendererCapabilitiesIfNecessary(false)
+            .setTunnelingEnabled(settings.enableTunneling)
+
+        if (clearVideoOverride) {
+            builder.clearOverridesOfType(C.TRACK_TYPE_VIDEO)
+        }
+
+        if (settings.maxStreamHeightPx > 0) {
+            builder
+                .setForceHighestSupportedBitrate(false)
+                .setMaxVideoSize(Int.MAX_VALUE, settings.maxStreamHeightPx)
+                .setMaxVideoBitrate(Int.MAX_VALUE)
+                .setMaxVideoFrameRate(240)
+        } else {
+            builder
+                .setForceHighestSupportedBitrate(true)
+                .setMaxVideoSize(Int.MAX_VALUE, Int.MAX_VALUE)
+                .setMaxVideoBitrate(Int.MAX_VALUE)
+                .setMaxVideoFrameRate(240)
+        }
+
+        if (settings.preferredAudioLanguage.isNotBlank()) {
+            builder.setPreferredAudioLanguages(settings.preferredAudioLanguage)
+        } else {
+            builder.setPreferredAudioLanguage(null)
+        }
+
+        if (settings.preferredSubtitleLanguage.isNotBlank()) {
+            builder.setPreferredTextLanguages(settings.preferredSubtitleLanguage)
+        } else {
+            builder.setPreferredTextLanguage(null)
+        }
+
+        selector.setParameters(builder)
+    }
+
     private fun applyFrameRateStrategy(enabled: Boolean) {
         val player = exoPlayer ?: return
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
@@ -357,11 +587,17 @@ class LumaPlaybackService : MediaSessionService() {
         }
     }
 
-    private fun applySeekParametersForItem(player: ExoPlayer, item: PlaybackQueueItem) {
-        // Keyframe-aligned fast seek eliminates multi-second stalls during online double-tap skips & scrubbing
-        player.setSeekParameters(
-            if (item.isStream) SeekParameters.CLOSEST_SYNC else SeekParameters.DEFAULT
-        )
+    private fun applySeekParameters(
+        player: ExoPlayer,
+        item: PlaybackQueueItem,
+        mode: SeekPrecisionMode
+    ) {
+        val params = when (mode) {
+            SeekPrecisionMode.CLOSEST_SYNC -> SeekParameters.CLOSEST_SYNC
+            SeekPrecisionMode.PREVIOUS_SYNC -> SeekParameters.PREVIOUS_SYNC
+            SeekPrecisionMode.EXACT -> if (item.isStream) SeekParameters.EXACT else SeekParameters.DEFAULT
+        }
+        player.setSeekParameters(params)
     }
 
     private val playerListener = object : Player.Listener {
@@ -371,7 +607,7 @@ class LumaPlaybackService : MediaSessionService() {
             val idx = player.currentMediaItemIndex
             currentQueue.getOrNull(idx)?.let { item ->
                 PlayerSessionHolder.updateCurrentItem(item)
-                applySeekParametersForItem(player, item)
+                applySeekParameters(player, item, latestSettings.seekPrecisionMode)
             }
             PlayerSessionHolder.subtitleSyncController.clear()
             PlayerSessionHolder.notifyTracksChanged()

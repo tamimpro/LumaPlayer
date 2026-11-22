@@ -1,10 +1,22 @@
-# Luma Player
+# Luma Player v2.0
 
-**A modern Android video player built for high-quality playback, flexible controls, local media management, and network streaming.**
+![Version](https://img.shields.io/badge/version-2.0.0-b4690e?style=flat-square)
+![Platform](https://img.shields.io/badge/Android-7.0%2B-3ddc84?style=flat-square)
+![Engine](https://img.shields.io/badge/Media3-ExoPlayer%201.5.1-38e8ff?style=flat-square)
 
-Luma Player combines an on-device video library with a configurable playback experience powered by AndroidX Media3. It is designed to make local videos and supported online streams easy to play, organize, and control.
+**A modern Android video player built for high-quality playback, flexible controls, local media management, and rock-solid network streaming.**
 
-> **Project status:** Luma Player is under development. Features and behavior may change as the project evolves. A prebuilt APK is not currently published in the repository's GitHub Releases.
+Luma Player combines an on-device video library with a configurable playback experience powered by AndroidX Media3. It is designed to make local videos and online streams effortless to play, organize, and customize.
+
+> **Latest Release (`v2.0.0`):** Download the installable **`LumaPlayer-v2.0.0.apk`** directly from this repository's [**GitHub Releases**](https://github.com/tamimpro/LumaPlayer/releases/latest) page.
+
+## What's New in v2.0
+
+- **Bulletproof Online Seeking & Double-Tap Skipping:** Overhauled HTTP streaming pipeline (`Accept-Encoding: identity`, standard browser User-Agent profiles, CBR extractor seek indexing, configurable back-buffer retention, local LRU disk stream caching, and seekability guards) so skipping or double-tapping online links never restarts from `00:00`.
+- **One-Tap Multi-Language Audio Switcher:** Dedicated top-bar **Audio Track** button (with active language badge like `ENG` / `HIN`) for both online streams and local multi-audio movies, plus automatic preferred audio & subtitle language selection.
+- **Crisp Light Default Theme:** Launches in the clean **Crisp Light** theme by default with instant switching to **True AMOLED Dark** or **System Default**.
+- **Ultra-Snappy Multi-Animations & 120Hz Scrolling:** Crisp route transitions, animated HUD choreography, directional double-tap skip arcs, and downsampled thumbnail loading for smooth scrolling across large 4K libraries.
+- **Advanced Settings Control Center:** Full power-user hub inside Settings for tuning Network Buffers & Seek Engine, Hardware/Software Decoders & HDR, Default Audio/Subtitle Language Rules, HUD telemetry, and Stream/Thumbnail Caches.
 
 ## Features
 

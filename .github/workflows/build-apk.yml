@@ -1,4 +1,4 @@
-name: Build Luma Player APK
+name: Build Luma Player v2.0 APK
 
 on:
   push:
@@ -13,13 +13,22 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Set up JDK 21
         uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: '21'
+
+      - name: Extract App Version from Gradle
+        run: |
+          VERSION_NAME=$(grep -E 'versionName\s*=' app/build.gradle.kts | head -n 1 | sed -E 's/.*"([^"]+)".*/\1/')
+          VERSION_NAME="${VERSION_NAME:-2.0.0}"
+          echo "APP_VERSION=$VERSION_NAME" >> "$GITHUB_ENV"
+          echo "RELEASE_TAG=v$VERSION_NAME" >> "$GITHUB_ENV"
+          echo "APK_FILENAME=LumaPlayer-v$VERSION_NAME.apk" >> "$GITHUB_ENV"
+          echo "Detected Luma Player version: v$VERSION_NAME"
 
       - name: Configure Android SDK & Licenses
         run: |
@@ -52,24 +61,42 @@ jobs:
       - name: Build Luma Player APK
         run: gradle :app:assembleDebug --no-daemon --stacktrace
 
-      - name: Prepare APK asset
-        run: cp app/build/outputs/apk/debug/app-debug.apk LumaPlayer.apk
+      - name: Prepare Versioned APK Asset
+        run: cp app/build/outputs/apk/debug/app-debug.apk "$APK_FILENAME"
 
-      - name: Upload APK artifact
+      - name: Upload APK Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: LumaPlayer-APK
-          path: LumaPlayer.apk
+          name: LumaPlayer-${{ env.RELEASE_TAG }}-APK
+          path: ${{ env.APK_FILENAME }}
 
-      - name: Publish clickable Latest Release APK
+      - name: Publish Versioned GitHub Release (${{ env.RELEASE_TAG }})
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          if gh release view latest >/dev/null 2>&1; then
-            gh release upload latest LumaPlayer.apk --clobber
+          RELEASE_NOTES=$(cat <<'EOF'
+          ## Luma Player v2.0.0
+
+          ### Highlights
+          - **Online Streaming Seek & Double-Tap Fix**: Forces `Accept-Encoding: identity`, standard mobile browser User-Agent, CBR extractor seeking, configurable back-buffer retention, LRU stream disk caching, and seekability safeguards so skipping online links never restarts from `00:00`.
+          - **One-Tap Multi-Language Audio Track Switcher**: Dedicated top-bar Audio Track button with decoded language names, codec/channel details, Mute option, and preferred audio/subtitle language matching.
+          - **Crisp Light Default Theme**: Launches in Crisp Light mode by default with instant switching to True AMOLED Dark or System Default.
+          - **Ultra-Snappy Multi-Animations & 120Hz Smooth Scrolling**: Fast zero-bounce screen/HUD transitions, animated double-tap skip arcs, and downsampled video thumbnails.
+          - **Advanced Settings Power-User Hub**: Granular controls for Network Buffer & Seek Engine, Hardware/Software Decoder & HDR, Audio/Subtitle Language Rules, and Player Skin/Cache management.
+
+          Download **`LumaPlayer-v2.0.0.apk`** below to install directly on Android 7.0+ (optimized for Android 13–16).
+          EOF
+          )
+
+          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            gh release upload "$RELEASE_TAG" "$APK_FILENAME" --clobber
+            gh release edit "$RELEASE_TAG" \
+              --title "Luma Player $RELEASE_TAG" \
+              --notes "$RELEASE_NOTES" \
+              --latest
           else
-            gh release create latest LumaPlayer.apk \
-              --title "Luma Player (Latest APK)" \
-              --notes "Automatically built installable APK for Luma Player (Android 13+ optimized)." \
+            gh release create "$RELEASE_TAG" "$APK_FILENAME" \
+              --title "Luma Player $RELEASE_TAG" \
+              --notes "$RELEASE_NOTES" \
               --latest
           fi

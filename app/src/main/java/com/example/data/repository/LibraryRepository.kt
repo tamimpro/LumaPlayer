@@ -861,7 +861,12 @@ class LibraryRepository(
         if (isStream) {
             val existing = dao.getStreamByUrl(uri)
             if (existing != null) {
-                dao.updateStreamProgress(uri, safePosition, now)
+                val keepPosition = if (safePosition == 0L && durationMs == 0L && existing.lastPositionMs > 2_000L) {
+                    existing.lastPositionMs
+                } else {
+                    safePosition
+                }
+                dao.updateStreamProgress(uri, keepPosition, now)
             } else {
                 dao.upsertStreamBookmark(
                     StreamBookmarkEntity(

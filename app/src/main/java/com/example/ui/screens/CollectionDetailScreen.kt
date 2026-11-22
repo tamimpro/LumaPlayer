@@ -146,7 +146,8 @@ fun CollectionDetailScreen(
                         onMoveFile = { onMoveVideo(video) },
                         onRenameFile = { onRenameVideo(video) },
                         onDeleteFile = { onDeleteVideo(video) },
-                        onRemoveFromPlaylist = onRemoveFromPlaylist?.let { fn -> { fn(video) } }
+                        onRemoveFromPlaylist = onRemoveFromPlaylist?.let { fn -> { fn(video) } },
+                        modifier = Modifier.animateItem()
                     )
                 }
             }

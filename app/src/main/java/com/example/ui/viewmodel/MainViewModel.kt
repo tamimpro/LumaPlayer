@@ -12,16 +12,21 @@ import com.example.data.local.StreamBookmarkEntity
 import com.example.data.local.VideoItemEntity
 import com.example.data.model.AppThemeMode
 import com.example.data.model.AspectRatioMode
+import com.example.data.model.DecoderMode
 import com.example.data.model.FolderSummary
 import com.example.data.model.PlaybackQueueItem
 import com.example.data.model.PlaybackRequest
 import com.example.data.model.PlayerOrientationMode
+import com.example.data.model.SeekPrecisionMode
 import com.example.data.model.StreamProtocol
 import com.example.data.model.SubtitleEdgeStyle
+import com.example.data.model.UserAgentProfile
 import com.example.data.model.VideoSortOption
 import com.example.data.preferences.UserSettings
 import com.example.data.repository.FileOpResult
 import com.example.data.repository.StorageAccessState
+import com.example.player.LumaStreamCache
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -30,6 +35,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import java.io.File
 
 class MainViewModel(application: Application) : AndroidViewModel(application) {
@@ -106,6 +112,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     private val _pendingMediaStoreDelete = MutableStateFlow<Pair<IntentSender, String>?>(null)
     val pendingMediaStoreDelete: StateFlow<Pair<IntentSender, String>?> = _pendingMediaStoreDelete.asStateFlow()
+
+    private val _streamCacheBytes = MutableStateFlow(0L)
+    val streamCacheBytes: StateFlow<Long> = _streamCacheBytes.asStateFlow()
+
+    private val _thumbnailCacheBytes = MutableStateFlow(0L)
+    val thumbnailCacheBytes: StateFlow<Long> = _thumbnailCacheBytes.asStateFlow()
 
     val filteredSortedVideos: StateFlow<List<VideoItemEntity>> = combine(
         allVideos,
@@ -448,6 +460,122 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     ) {
         viewModelScope.launch {
             prefs.updateSubtitleSettings(scale = scale, bgOpacity = bgOpacity, edgeStyle = edgeStyle)
+        }
+    }
+
+    fun updateAdvancedNetworkSettings(
+        seekPrecisionMode: SeekPrecisionMode? = null,
+        minBufferSeconds: Int? = null,
+        maxBufferSeconds: Int? = null,
+        backBufferSeconds: Int? = null,
+        forceIdentityEncoding: Boolean? = null,
+        enableCbrSeeking: Boolean? = null,
+        networkTimeoutSeconds: Int? = null,
+        userAgentProfile: UserAgentProfile? = null,
+        customUserAgent: String? = null
+    ) {
+        viewModelScope.launch {
+            prefs.updateAdvancedNetworkSettings(
+                seekPrecisionMode = seekPrecisionMode,
+                minBufferSeconds = minBufferSeconds,
+                maxBufferSeconds = maxBufferSeconds,
+                backBufferSeconds = backBufferSeconds,
+                forceIdentityEncoding = forceIdentityEncoding,
+                enableCbrSeeking = enableCbrSeeking,
+                networkTimeoutSeconds = networkTimeoutSeconds,
+                userAgentProfile = userAgentProfile,
+                customUserAgent = customUserAgent
+            )
+        }
+    }
+
+    fun updateAdvancedDecoderSettings(
+        decoderMode: DecoderMode? = null,
+        hdrWindowEnabled: Boolean? = null,
+        enableTunneling: Boolean? = null,
+        maxStreamHeightPx: Int? = null
+    ) {
+        viewModelScope.launch {
+            prefs.updateAdvancedDecoderSettings(
+                decoderMode = decoderMode,
+                hdrWindowEnabled = hdrWindowEnabled,
+                enableTunneling = enableTunneling,
+                maxStreamHeightPx = maxStreamHeightPx
+            )
+        }
+    }
+
+    fun updateAdvancedLanguageSettings(
+        preferredAudioLanguage: String? = null,
+        preferredSubtitleLanguage: String? = null,
+        autoLoadSiblingSubtitles: Boolean? = null,
+        skipSilenceEnabled: Boolean? = null,
+        pauseOnHeadphonesUnplugged: Boolean? = null
+    ) {
+        viewModelScope.launch {
+            prefs.updateAdvancedLanguageSettings(
+                preferredAudioLanguage = preferredAudioLanguage,
+                preferredSubtitleLanguage = preferredSubtitleLanguage,
+                autoLoadSiblingSubtitles = autoLoadSiblingSubtitles,
+                skipSilenceEnabled = skipSilenceEnabled,
+                pauseOnHeadphonesUnplugged = pauseOnHeadphonesUnplugged
+            )
+        }
+    }
+
+    fun updateAdvancedSkinAndCacheSettings(
+        hudAutoHideSeconds: Int? = null,
+        showHudClockAndBattery: Boolean? = null,
+        showHudNetworkStats: Boolean? = null,
+        doubleTapZoneWide: Boolean? = null,
+        streamCacheSizeMb: Int? = null
+    ) {
+        viewModelScope.launch {
+            prefs.updateAdvancedSkinAndCacheSettings(
+                hudAutoHideSeconds = hudAutoHideSeconds,
+                showHudClockAndBattery = showHudClockAndBattery,
+                showHudNetworkStats = showHudNetworkStats,
+                doubleTapZoneWide = doubleTapZoneWide,
+                streamCacheSizeMb = streamCacheSizeMb
+            )
+        }
+    }
+
+    fun refreshCacheSizes() {
+        viewModelScope.launch {
+            val (streamBytes, thumbBytes) = withContext(Dispatchers.IO) {
+                LumaStreamCache.computeStreamCacheBytes(app) to LumaStreamCache.computeThumbnailCacheBytes(app)
+            }
+            _streamCacheBytes.value = streamBytes
+            _thumbnailCacheBytes.value = thumbBytes
+        }
+    }
+
+    fun clearStreamCache() {
+        viewModelScope.launch {
+            withContext(Dispatchers.IO) {
+                LumaStreamCache.clearStreamCache(app)
+            }
+            refreshCacheSizes()
+            showBanner("Online stream cache cleared")
+        }
+    }
+
+    @OptIn(coil.annotation.ExperimentalCoilApi::class)
+    fun clearThumbnailCache() {
+        viewModelScope.launch {
+            withContext(Dispatchers.IO) {
+                LumaStreamCache.clearThumbnailCache(app)
+            }
+            refreshCacheSizes()
+            showBanner("Thumbnail cache cleared")
+        }
+    }
+
+    fun resetAllSettingsToDefaults() {
+        viewModelScope.launch {
+            prefs.resetAllToDefaults()
+            showBanner("All settings restored to v2.0 defaults")
         }
     }
 

@@ -201,7 +201,8 @@ fun VideosScreen(
                         onShowInfo = { onShowInfo(video) },
                         onMoveFile = { onMoveVideo(video) },
                         onRenameFile = { onRenameVideo(video) },
-                        onDeleteFile = { onDeleteVideo(video) }
+                        onDeleteFile = { onDeleteVideo(video) },
+                        modifier = Modifier.animateItem()
                     )
                 }
             }

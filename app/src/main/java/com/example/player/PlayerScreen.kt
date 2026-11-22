@@ -2,14 +2,24 @@ package com.example.player
 
 import android.app.Activity
 import android.content.Context
+import android.content.Intent
+import android.content.IntentFilter
 import android.media.AudioManager
+import android.os.BatteryManager
 import android.view.SurfaceView
 import android.view.WindowManager
 import androidx.annotation.OptIn
+import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.animateDpAsState
+import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
+import androidx.compose.animation.scaleIn
+import androidx.compose.animation.scaleOut
+import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
@@ -27,6 +37,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.displayCutout
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -41,6 +52,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
+import androidx.compose.material.icons.rounded.Audiotrack
 import androidx.compose.material.icons.rounded.Brightness6
 import androidx.compose.material.icons.rounded.ClosedCaption
 import androidx.compose.material.icons.rounded.Equalizer
@@ -118,6 +130,7 @@ import com.example.ui.theme.ErrorRed
 import com.example.ui.theme.HdrGold
 import com.example.ui.theme.HwDecodeGreen
 import com.example.ui.theme.LumaMonoStyle
+import com.example.ui.theme.LumaMotion
 import com.example.ui.theme.TimelineBufferIce
 import com.example.ui.theme.TimelineIceCyan
 import com.example.ui.theme.TimelineRailShadow
@@ -128,9 +141,13 @@ import com.example.ui.theme.WarmObsidianContainer
 import com.example.ui.theme.WarmObsidianHigh
 import com.example.ui.theme.WarmObsidianLow
 import com.example.ui.theme.WarmStoneSecondary
+import com.example.ui.theme.lumaPressScale
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 import kotlin.math.abs
 import kotlin.math.roundToInt
 
@@ -168,6 +185,7 @@ fun PlayerScreen(
     val playbackError by viewModel.playbackError.collectAsStateWithLifecycle()
 
     var controlsVisible by remember { mutableStateOf(true) }
+    var hudInteractionNonce by remember { mutableIntStateOf(0) }
     var lockButtonVisible by remember { mutableStateOf(false) }
 
     // Live gesture HUD overlays
@@ -176,15 +194,44 @@ fun PlayerScreen(
     var volumeLevel by remember { mutableFloatStateOf(readCurrentVolumeFraction(audioManager)) }
     var scrubPreviewMs by remember { mutableLongStateOf(0L) }
     var scrubDeltaMs by remember { mutableLongStateOf(0L) }
-    var doubleTapFeedback by remember { mutableStateOf<Pair<Boolean, Int>?>(null) } // isForward to cumulative seconds
+    var doubleTapFeedback by remember { mutableStateOf<Pair<Boolean, Int>?>(null) }
     var doubleTapSeq by remember { mutableIntStateOf(0) }
     var isSliderDragging by remember { mutableStateOf(false) }
     var sliderDragPositionMs by remember { mutableLongStateOf(0L) }
 
-    // Auto-hide HUD while playing
-    LaunchedEffect(controlsVisible, uiState.isPlaying, uiState.activeSheet, isSliderDragging, activeGesture) {
-        if (controlsVisible && uiState.isPlaying && uiState.activeSheet == ActivePlayerSheet.NONE && !isSliderDragging && activeGesture == GestureKind.NONE) {
-            delay(3_500L)
+    // Live system clock & battery pill (refreshes cleanly every 20s only when enabled)
+    var clockAndBatteryText by remember { mutableStateOf("") }
+    LaunchedEffect(settings.showHudClockAndBattery) {
+        if (!settings.showHudClockAndBattery) {
+            clockAndBatteryText = ""
+            return@LaunchedEffect
+        }
+        val timeFormatter = SimpleDateFormat("HH:mm", Locale.getDefault())
+        while (true) {
+            val timeStr = timeFormatter.format(Date())
+            val batteryPct = readBatteryPercent(context)
+            clockAndBatteryText = if (batteryPct in 0..100) "$timeStr · $batteryPct%" else timeStr
+            delay(20_000L)
+        }
+    }
+
+    // Auto-hide HUD using user's configured hudAutoHideSeconds, resetting cleanly on any HUD button tap
+    LaunchedEffect(
+        controlsVisible,
+        hudInteractionNonce,
+        uiState.isPlaying,
+        uiState.activeSheet,
+        isSliderDragging,
+        activeGesture,
+        settings.hudAutoHideSeconds
+    ) {
+        if (controlsVisible &&
+            uiState.isPlaying &&
+            uiState.activeSheet == ActivePlayerSheet.NONE &&
+            !isSliderDragging &&
+            activeGesture == GestureKind.NONE
+        ) {
+            delay(settings.hudAutoHideSeconds.coerceIn(2, 10) * 1_000L)
             controlsVisible = false
         }
     }
@@ -198,9 +245,13 @@ fun PlayerScreen(
 
     LaunchedEffect(doubleTapSeq) {
         if (doubleTapFeedback != null) {
-            delay(800L)
+            delay(750L)
             doubleTapFeedback = null
         }
+    }
+
+    fun bumpHudInteraction() {
+        hudInteractionNonce += 1
     }
 
     val latestSettings by rememberUpdatedState(settings)
@@ -327,6 +378,13 @@ fun PlayerScreen(
             var chainedUntilMs by remember { mutableLongStateOf(0L) }
             var pendingSingleTapJob by remember { mutableStateOf<Job?>(null) }
 
+            DisposableEffect(Unit) {
+                onDispose {
+                    pendingSingleTapJob?.cancel()
+                    pendingSingleTapJob = null
+                }
+            }
+
             Box(
                 modifier = Modifier
                     .fillMaxSize()
@@ -436,7 +494,9 @@ fun PlayerScreen(
                                 } else {
                                     val now = System.currentTimeMillis()
                                     val isRightSide = startX >= viewWidth * 0.5f
-                                    val inSkipZone = startX <= viewWidth * 0.44f || startX >= viewWidth * 0.56f
+                                    val leftEdge = if (latestSettings.doubleTapZoneWide) 0.44f else 0.35f
+                                    val rightEdge = if (latestSettings.doubleTapZoneWide) 0.56f else 0.65f
+                                    val inSkipZone = startX <= viewWidth * leftEdge || startX >= viewWidth * rightEdge
                                     val isContinuingChain = inSkipZone &&
                                         chainedSideIsRight == isRightSide &&
                                         now <= chainedUntilMs
@@ -447,26 +507,30 @@ fun PlayerScreen(
                                     if (isContinuingChain || isDoubleTap) {
                                         pendingSingleTapJob?.cancel()
                                         val skipSecs = latestSettings.doubleTapSkipSeconds
-                                        val nextTotal = if (isContinuingChain) chainedTotalSeconds + skipSecs else skipSecs
-                                        chainedSideIsRight = isRightSide
-                                        chainedTotalSeconds = nextTotal
-                                        chainedUntilMs = now + 700L
-                                        lastTapTime = now
-                                        lastTapX = startX
-                                        viewModel.seekBy(if (isRightSide) skipSecs * 1000L else -skipSecs * 1000L)
-                                        doubleTapFeedback = isRightSide to nextTotal
-                                        doubleTapSeq += 1
+                                        val didSeek = viewModel.seekBy(
+                                            if (isRightSide) skipSecs * 1000L else -skipSecs * 1000L
+                                        )
+                                        if (didSeek) {
+                                            val nextTotal = if (isContinuingChain) chainedTotalSeconds + skipSecs else skipSecs
+                                            chainedSideIsRight = isRightSide
+                                            chainedTotalSeconds = nextTotal
+                                            chainedUntilMs = now + 700L
+                                            lastTapTime = now
+                                            lastTapX = startX
+                                            doubleTapFeedback = isRightSide to nextTotal
+                                            doubleTapSeq += 1
+                                        }
                                     } else {
                                         lastTapTime = now
                                         lastTapX = startX
                                         chainedSideIsRight = null
                                         chainedTotalSeconds = 0
                                         chainedUntilMs = 0L
-                                        // Slight delay prevents HUD flicker when user is starting a double-tap skip
                                         pendingSingleTapJob?.cancel()
                                         pendingSingleTapJob = coroutineScope.launch {
-                                            delay(230L)
+                                            delay(215L)
                                             controlsVisible = !controlsVisible
+                                            if (controlsVisible) bumpHudInteraction()
                                         }
                                     }
                                 }
@@ -477,26 +541,29 @@ fun PlayerScreen(
         }
 
         // 4. Buffering Spinner (High-Contrast Ice Cyan)
-        if (uiState.isBuffering && playbackError == null) {
+        AnimatedVisibility(
+            visible = uiState.isBuffering && playbackError == null,
+            enter = fadeIn(tween(140)),
+            exit = fadeOut(tween(140)),
+            modifier = Modifier.align(Alignment.Center)
+        ) {
             CircularProgressIndicator(
                 color = TimelineIceCyan,
                 strokeWidth = 3.dp,
-                modifier = Modifier
-                    .align(Alignment.Center)
-                    .size(48.dp)
+                modifier = Modifier.size(48.dp)
             )
         }
 
         // 5. Gesture Feedback HUD Pills (Brightness / Volume / Seek / Zoom)
         AnimatedVisibility(
             visible = activeGesture != GestureKind.NONE && !isInPipMode,
-            enter = fadeIn(),
-            exit = fadeOut(),
+            enter = fadeIn(tween(120)) + scaleIn(tween(140), initialScale = 0.92f),
+            exit = fadeOut(tween(120)) + scaleOut(tween(120), targetScale = 0.94f),
             modifier = Modifier.align(Alignment.Center)
         ) {
             Surface(
                 shape = RoundedCornerShape(18.dp),
-                color = WarmObsidianLow.copy(alpha = 0.88f),
+                color = WarmObsidianLow.copy(alpha = 0.90f),
                 border = BorderStroke(1.dp, WarmBorder)
             ) {
                 when (activeGesture) {
@@ -556,53 +623,28 @@ fun PlayerScreen(
             }
         }
 
-        // 6. Chained Double-Tap Directional Skip Feedback (Ice Cyan Glow)
-        doubleTapFeedback?.let { (isForward, seconds) ->
-            Surface(
-                shape = RoundedCornerShape(28.dp),
-                color = WarmObsidianLow.copy(alpha = 0.86f),
-                border = BorderStroke(1.dp, TimelineIceCyan.copy(alpha = 0.55f)),
-                modifier = Modifier
-                    .align(if (isForward) Alignment.CenterEnd else Alignment.CenterStart)
-                    .padding(horizontal = 32.dp)
-            ) {
-                Row(
-                    modifier = Modifier.padding(horizontal = 20.dp, vertical = 14.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Icon(
-                        imageVector = if (isForward) Icons.Rounded.FastForward else Icons.Rounded.FastRewind,
-                        contentDescription = null,
-                        tint = TimelineIceCyan,
-                        modifier = Modifier.size(28.dp)
-                    )
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Text(
-                        text = "${if (isForward) "+" else "-"}${seconds}s",
-                        style = LumaMonoStyle.copy(
-                            color = WarmIvory,
-                            fontWeight = FontWeight.Bold
-                        )
-                    )
-                }
-            }
-        }
+        // 6. Animated Double-Tap Directional Skip Arc + Chained Seconds Pill
+        DoubleTapSkipArcOverlay(
+            feedback = doubleTapFeedback,
+            pulseKey = doubleTapSeq,
+            modifier = Modifier.fillMaxSize()
+        )
 
         // 7. Transient Status Toast Pill
         AnimatedVisibility(
             visible = uiState.statusToast != null && !isInPipMode,
-            enter = fadeIn(),
-            exit = fadeOut(),
+            enter = fadeIn(tween(140)) + scaleIn(tween(150), initialScale = 0.94f),
+            exit = fadeOut(tween(130)),
             modifier = Modifier
                 .align(Alignment.TopCenter)
                 .windowInsetsPadding(WindowInsets.statusBars)
-                .padding(top = 72.dp)
+                .padding(top = 74.dp)
         ) {
             uiState.statusToast?.let { toast ->
                 Surface(
                     shape = RoundedCornerShape(20.dp),
-                    color = WarmObsidianContainer.copy(alpha = 0.92f),
-                    border = BorderStroke(1.dp, CinemaAmber.copy(alpha = 0.45f))
+                    color = WarmObsidianContainer.copy(alpha = 0.94f),
+                    border = BorderStroke(1.dp, CinemaAmber.copy(alpha = 0.5f))
                 ) {
                     Text(
                         text = toast,
@@ -617,8 +659,8 @@ fun PlayerScreen(
         // 8. Screen Lock Floating Unlock Button
         AnimatedVisibility(
             visible = uiState.isLocked && lockButtonVisible && !isInPipMode,
-            enter = fadeIn(),
-            exit = fadeOut(),
+            enter = fadeIn(tween(140)) + scaleIn(tween(150), initialScale = 0.92f),
+            exit = fadeOut(tween(140)),
             modifier = Modifier
                 .align(Alignment.CenterStart)
                 .windowInsetsPadding(WindowInsets.displayCutout)
@@ -627,9 +669,11 @@ fun PlayerScreen(
             Surface(
                 onClick = { viewModel.toggleScreenLock() },
                 shape = RoundedCornerShape(16.dp),
-                color = WarmObsidianLow.copy(alpha = 0.9f),
-                border = BorderStroke(1.dp, CinemaAmber.copy(alpha = 0.5f)),
-                modifier = Modifier.testTag("player_unlock_button")
+                color = WarmObsidianLow.copy(alpha = 0.92f),
+                border = BorderStroke(1.dp, CinemaAmber.copy(alpha = 0.55f)),
+                modifier = Modifier
+                    .lumaPressScale()
+                    .testTag("player_unlock_button")
             ) {
                 Row(
                     modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
@@ -642,26 +686,33 @@ fun PlayerScreen(
             }
         }
 
-        // 9. Main Translucent Player HUD (Hidden in PiP & Lock Mode)
-        AnimatedVisibility(
-            visible = controlsVisible && !uiState.isLocked && !isInPipMode,
-            enter = fadeIn(),
-            exit = fadeOut(),
-            modifier = Modifier.fillMaxSize()
-        ) {
-            Box(modifier = Modifier.fillMaxSize()) {
-                // Top Scrim & Bar
+        // 9. Multi-Layer Choreographed Player HUD (Hidden in PiP & Lock Mode)
+        val showHud = controlsVisible && !uiState.isLocked && !isInPipMode
+        if (!isInPipMode) {
+            // 9A. Top Scrim & Bar (Slides cleanly from top, absorbs stray touches between buttons)
+            AnimatedVisibility(
+                visible = showHud,
+                enter = LumaMotion.hudTopEnter(),
+                exit = LumaMotion.hudTopExit(),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .align(Alignment.TopCenter)
+            ) {
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .align(Alignment.TopCenter)
                         .background(
                             Brush.verticalGradient(
-                                listOf(Color(0xE0000000), Color(0x66000000), Color.Transparent)
+                                listOf(Color(0xE6000000), Color(0x73000000), Color.Transparent)
                             )
                         )
+                        .clickable(
+                            interactionSource = remember { MutableInteractionSource() },
+                            indication = null,
+                            onClick = { bumpHudInteraction() }
+                        )
                         .windowInsetsPadding(WindowInsets.statusBars.union(WindowInsets.displayCutout))
-                        .padding(horizontal = 12.dp, vertical = 10.dp),
+                        .padding(horizontal = 10.dp, vertical = 10.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     IconButton(
@@ -699,23 +750,98 @@ fun PlayerScreen(
                             if (uiState.isStream && uiState.durationMs == 0L) {
                                 HudMiniTag("LIVE", ErrorRed)
                             }
+                            if (settings.showHudNetworkStats && diagnostics.videoBitrateBps > 0) {
+                                HudMiniTag(
+                                    "${FormatUtils.formatBitrate(diagnostics.videoBitrateBps)} · ${diagnostics.bufferedPercent}%",
+                                    TimelineIceCyan
+                                )
+                            }
                             if (uiState.abPointAMs != null && uiState.abPointBMs != null) {
                                 HudMiniTag("A-B", CinemaAmber)
                             }
                             if (uiState.sleepTimerRemainingMs != null) {
                                 HudMiniTag("Sleep ${FormatUtils.formatDuration(uiState.sleepTimerRemainingMs!!)}", WarmStoneSecondary)
                             }
+                            if (settings.showHudClockAndBattery && clockAndBatteryText.isNotBlank()) {
+                                Text(
+                                    text = clockAndBatteryText,
+                                    style = LumaMonoStyle.copy(color = WarmStoneSecondary)
+                                )
+                            }
+                        }
+                    }
+
+                    // Dedicated One-Tap Multi-Language Audio Selector Button (online & offline movies)
+                    val showAudioBadge = uiState.audioTracks.size > 1 || uiState.audioDisabled
+                    val audioBadgeText = uiState.activeAudioLanguageCode ?: "AUD"
+                    if (showAudioBadge) {
+                        Surface(
+                            onClick = {
+                                bumpHudInteraction()
+                                viewModel.openSheet(ActivePlayerSheet.AUDIO_TRACKS)
+                            },
+                            shape = RoundedCornerShape(12.dp),
+                            color = if (uiState.audioDisabled) ErrorRed.copy(alpha = 0.22f) else CinemaAmber.copy(alpha = 0.22f),
+                            border = BorderStroke(
+                                1.dp,
+                                if (uiState.audioDisabled) ErrorRed else CinemaAmber.copy(alpha = 0.7f)
+                            ),
+                            modifier = Modifier
+                                .height(36.dp)
+                                .padding(end = 4.dp)
+                                .lumaPressScale()
+                                .testTag("player_audio_tracks_button")
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(horizontal = 9.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(4.dp)
+                            ) {
+                                Icon(
+                                    Icons.Rounded.Audiotrack,
+                                    contentDescription = "Select audio language",
+                                    tint = if (uiState.audioDisabled) ErrorRed else CinemaAmber,
+                                    modifier = Modifier.size(16.dp)
+                                )
+                                Text(
+                                    text = audioBadgeText,
+                                    style = LumaMonoStyle.copy(
+                                        color = if (uiState.audioDisabled) ErrorRed else CinemaAmber,
+                                        fontWeight = FontWeight.Bold
+                                    )
+                                )
+                            }
+                        }
+                    } else {
+                        IconButton(
+                            onClick = {
+                                bumpHudInteraction()
+                                viewModel.openSheet(ActivePlayerSheet.AUDIO_TRACKS)
+                            },
+                            modifier = Modifier.testTag("player_audio_tracks_button")
+                        ) {
+                            Icon(
+                                Icons.Rounded.Audiotrack,
+                                contentDescription = "Audio language tracks",
+                                tint = WarmIvory
+                            )
                         }
                     }
 
                     IconButton(
-                        onClick = { viewModel.openSheet(ActivePlayerSheet.TRACKS) },
+                        onClick = {
+                            bumpHudInteraction()
+                            viewModel.openSheet(ActivePlayerSheet.TRACKS)
+                        },
                         modifier = Modifier.testTag("player_tracks_button")
                     ) {
-                        Icon(Icons.Rounded.ClosedCaption, contentDescription = "Audio, quality & subtitles", tint = WarmIvory)
+                        Icon(Icons.Rounded.ClosedCaption, contentDescription = "Quality & subtitles", tint = WarmIvory)
                     }
                     IconButton(
-                        onClick = { viewModel.openSheet(ActivePlayerSheet.AUDIO_FX) },
+                        onClick = {
+                            bumpHudInteraction()
+                            viewModel.openSheet(ActivePlayerSheet.AUDIO_FX)
+                        },
                         modifier = Modifier.testTag("player_eq_button")
                     ) {
                         Icon(
@@ -725,72 +851,109 @@ fun PlayerScreen(
                         )
                     }
                     IconButton(
-                        onClick = onEnterPip,
+                        onClick = {
+                            bumpHudInteraction()
+                            onEnterPip()
+                        },
                         modifier = Modifier.testTag("player_pip_button")
                     ) {
                         Icon(Icons.Rounded.PictureInPictureAlt, contentDescription = "Picture in Picture", tint = WarmIvory)
                     }
                     IconButton(
-                        onClick = { viewModel.openSheet(ActivePlayerSheet.TOOLS) },
+                        onClick = {
+                            bumpHudInteraction()
+                            viewModel.openSheet(ActivePlayerSheet.TOOLS)
+                        },
                         modifier = Modifier.testTag("player_tools_button")
                     ) {
                         Icon(Icons.Rounded.MoreVert, contentDescription = "More playback tools", tint = WarmIvory)
                     }
                 }
+            }
 
-                // Center Playback Controls
+            // 9B. Center Playback Controls (Snappy scale-in choreography + Animated Play/Pause morph)
+            AnimatedVisibility(
+                visible = showHud,
+                enter = LumaMotion.hudCenterEnter(),
+                exit = LumaMotion.hudCenterExit(),
+                modifier = Modifier.align(Alignment.Center)
+            ) {
                 Row(
-                    modifier = Modifier.align(Alignment.Center),
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(18.dp)
                 ) {
                     if (uiState.hasPrevious) {
                         IconButton(
-                            onClick = { viewModel.skipPrevious() },
+                            onClick = {
+                                bumpHudInteraction()
+                                viewModel.skipPrevious()
+                            },
                             modifier = Modifier
                                 .size(48.dp)
+                                .lumaPressScale(0.92f)
                                 .clip(CircleShape)
-                                .background(Color(0x73000000))
+                                .background(Color(0x7A000000))
                         ) {
                             Icon(Icons.Rounded.SkipPrevious, contentDescription = "Previous video", tint = WarmIvory, modifier = Modifier.size(28.dp))
                         }
                     }
 
                     IconButton(
-                        onClick = { viewModel.seekBy(-settings.doubleTapSkipSeconds * 1000L) },
+                        onClick = {
+                            bumpHudInteraction()
+                            viewModel.seekBy(-settings.doubleTapSkipSeconds * 1000L)
+                        },
                         modifier = Modifier
                             .size(52.dp)
+                            .lumaPressScale(0.92f)
                             .clip(CircleShape)
-                            .background(Color(0x73000000))
+                            .background(Color(0x7A000000))
                             .testTag("player_rewind_button")
                     ) {
                         Icon(Icons.Rounded.Replay10, contentDescription = "Skip back", tint = WarmIvory, modifier = Modifier.size(30.dp))
                     }
 
                     Surface(
-                        onClick = { viewModel.togglePlayPause() },
+                        onClick = {
+                            bumpHudInteraction()
+                            viewModel.togglePlayPause()
+                        },
                         shape = CircleShape,
                         color = CinemaAmber,
                         modifier = Modifier
                             .size(66.dp)
+                            .lumaPressScale(0.92f)
                             .testTag("player_play_pause_button")
                     ) {
                         Box(contentAlignment = Alignment.Center) {
-                            Icon(
-                                imageVector = if (uiState.isPlaying) Icons.Rounded.Pause else Icons.Rounded.PlayArrow,
-                                contentDescription = if (uiState.isPlaying) "Pause" else "Play",
-                                tint = AmoledBlack,
-                                modifier = Modifier.size(38.dp)
-                            )
+                            AnimatedContent(
+                                targetState = uiState.isPlaying,
+                                transitionSpec = {
+                                    (fadeIn(tween(120)) + scaleIn(tween(140), initialScale = 0.78f))
+                                        .togetherWith(fadeOut(tween(100)) + scaleOut(tween(110), targetScale = 0.82f))
+                                },
+                                label = "playPauseIcon"
+                            ) { playing ->
+                                Icon(
+                                    imageVector = if (playing) Icons.Rounded.Pause else Icons.Rounded.PlayArrow,
+                                    contentDescription = if (playing) "Pause" else "Play",
+                                    tint = AmoledBlack,
+                                    modifier = Modifier.size(38.dp)
+                                )
+                            }
                         }
                     }
 
                     IconButton(
-                        onClick = { viewModel.seekBy(settings.doubleTapSkipSeconds * 1000L) },
+                        onClick = {
+                            bumpHudInteraction()
+                            viewModel.seekBy(settings.doubleTapSkipSeconds * 1000L)
+                        },
                         modifier = Modifier
                             .size(52.dp)
+                            .lumaPressScale(0.92f)
                             .clip(CircleShape)
-                            .background(Color(0x73000000))
+                            .background(Color(0x7A000000))
                             .testTag("player_forward_button")
                     ) {
                         Icon(Icons.Rounded.Forward10, contentDescription = "Skip forward", tint = WarmIvory, modifier = Modifier.size(30.dp))
@@ -798,39 +961,60 @@ fun PlayerScreen(
 
                     if (uiState.hasNext) {
                         IconButton(
-                            onClick = { viewModel.skipNext() },
+                            onClick = {
+                                bumpHudInteraction()
+                                viewModel.skipNext()
+                            },
                             modifier = Modifier
                                 .size(48.dp)
+                                .lumaPressScale(0.92f)
                                 .clip(CircleShape)
-                                .background(Color(0x73000000))
+                                .background(Color(0x7A000000))
                         ) {
                             Icon(Icons.Rounded.SkipNext, contentDescription = "Next video", tint = WarmIvory, modifier = Modifier.size(28.dp))
                         }
                     }
                 }
+            }
 
-                // Bottom Scrim, High-Contrast Ice Cyan Timeline & Quick Controls
+            // 9C. Bottom Scrim, High-Contrast Ice Cyan Timeline & Quick Controls (Absorbs stray taps cleanly)
+            AnimatedVisibility(
+                visible = showHud,
+                enter = LumaMotion.hudBottomEnter(),
+                exit = LumaMotion.hudBottomExit(),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .align(Alignment.BottomCenter)
+            ) {
                 Column(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .align(Alignment.BottomCenter)
                         .background(
                             Brush.verticalGradient(
-                                listOf(Color.Transparent, Color(0x99000000), Color(0xEC000000))
+                                listOf(Color.Transparent, Color(0x99000000), Color(0xF0000000))
                             )
+                        )
+                        .clickable(
+                            interactionSource = remember { MutableInteractionSource() },
+                            indication = null,
+                            onClick = { bumpHudInteraction() }
                         )
                         .windowInsetsPadding(WindowInsets.displayCutout)
                         .padding(start = 16.dp, end = 16.dp, top = 12.dp, bottom = 18.dp)
                 ) {
                     if (abs(uiState.zoomScale - 1.0f) > 0.05f) {
                         Surface(
-                            onClick = { viewModel.resetZoom() },
+                            onClick = {
+                                bumpHudInteraction()
+                                viewModel.resetZoom()
+                            },
                             shape = RoundedCornerShape(16.dp),
-                            color = WarmObsidianContainer.copy(alpha = 0.9f),
+                            color = WarmObsidianContainer.copy(alpha = 0.92f),
                             border = BorderStroke(1.dp, CinemaAmber.copy(alpha = 0.45f)),
                             modifier = Modifier
                                 .align(Alignment.CenterHorizontally)
                                 .padding(bottom = 8.dp)
+                                .lumaPressScale()
                         ) {
                             Text(
                                 text = "Zoom ${(uiState.zoomScale * 100).toInt()}% · Tap to Reset",
@@ -840,52 +1024,28 @@ fun PlayerScreen(
                         }
                     }
 
-                    val displayPos = if (isSliderDragging) sliderDragPositionMs else uiState.positionMs
-
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Text(
-                            text = FormatUtils.formatDuration(displayPos),
-                            style = LumaMonoStyle.copy(color = WarmIvory, fontWeight = FontWeight.SemiBold)
-                        )
-                        CinemaTimelineBar(
-                            positionMs = displayPos,
-                            bufferedPositionMs = uiState.bufferedPositionMs,
-                            durationMs = uiState.durationMs,
-                            abPointAMs = uiState.abPointAMs,
-                            abPointBMs = uiState.abPointBMs,
-                            isDragging = isSliderDragging,
-                            onScrubStart = { pos ->
-                                isSliderDragging = true
-                                sliderDragPositionMs = pos
-                            },
-                            onScrubMove = { pos ->
-                                isSliderDragging = true
-                                sliderDragPositionMs = pos
-                            },
-                            onScrubCommit = { pos ->
-                                isSliderDragging = false
-                                viewModel.seekTo(pos)
-                            },
-                            modifier = Modifier
-                                .weight(1f)
-                                .padding(horizontal = 10.dp)
-                                .testTag("player_seek_slider")
-                        )
-                        Text(
-                            text = if (uiState.isStream && uiState.durationMs <= 0L) {
-                                "LIVE"
-                            } else {
-                                FormatUtils.formatDuration(uiState.durationMs)
-                            },
-                            style = LumaMonoStyle.copy(
-                                color = if (uiState.isStream && uiState.durationMs <= 0L) ErrorRed else WarmStoneSecondary,
-                                fontWeight = FontWeight.Medium
-                            )
-                        )
-                    }
+                    PlayerTimelineRow(
+                        positionMs = if (isSliderDragging) sliderDragPositionMs else uiState.positionMs,
+                        bufferedPositionMs = uiState.bufferedPositionMs,
+                        durationMs = uiState.durationMs,
+                        isStream = uiState.isStream,
+                        abPointAMs = uiState.abPointAMs,
+                        abPointBMs = uiState.abPointBMs,
+                        isDragging = isSliderDragging,
+                        onScrubStart = { pos ->
+                            isSliderDragging = true
+                            sliderDragPositionMs = pos
+                        },
+                        onScrubMove = { pos ->
+                            isSliderDragging = true
+                            sliderDragPositionMs = pos
+                        },
+                        onScrubCommit = { pos ->
+                            isSliderDragging = false
+                            bumpHudInteraction()
+                            viewModel.seekTo(pos)
+                        }
+                    )
 
                     Row(
                         modifier = Modifier.fillMaxWidth(),
@@ -897,20 +1057,29 @@ fun PlayerScreen(
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             IconButton(
-                                onClick = { viewModel.toggleScreenLock() },
+                                onClick = {
+                                    bumpHudInteraction()
+                                    viewModel.toggleScreenLock()
+                                },
                                 modifier = Modifier.testTag("player_lock_button")
                             ) {
                                 Icon(Icons.Rounded.Lock, contentDescription = "Lock screen", tint = WarmIvory)
                             }
                             HudActionPill(
-                                text = String.format(java.util.Locale.US, "%.2gx", uiState.playbackSpeed),
+                                text = String.format(Locale.US, "%.2gx", uiState.playbackSpeed),
                                 highlighted = abs(uiState.playbackSpeed - 1.0f) > 0.02f,
-                                onClick = { viewModel.openSheet(ActivePlayerSheet.SPEED) },
+                                onClick = {
+                                    bumpHudInteraction()
+                                    viewModel.openSheet(ActivePlayerSheet.SPEED)
+                                },
                                 tag = "player_speed_pill"
                             )
                             // Dedicated One-Tap Opt-In Background Audio Button (OFF by default, resets per session)
                             Surface(
-                                onClick = onEnterBackgroundAudio,
+                                onClick = {
+                                    bumpHudInteraction()
+                                    onEnterBackgroundAudio()
+                                },
                                 shape = RoundedCornerShape(12.dp),
                                 color = if (backgroundPlayActive) {
                                     CinemaAmber.copy(alpha = 0.24f)
@@ -923,6 +1092,7 @@ fun PlayerScreen(
                                 ),
                                 modifier = Modifier
                                     .height(36.dp)
+                                    .lumaPressScale()
                                     .testTag("player_bg_audio_button")
                             ) {
                                 Row(
@@ -954,11 +1124,17 @@ fun PlayerScreen(
                             HudActionPill(
                                 text = uiState.aspectRatioMode.shortLabel,
                                 highlighted = uiState.aspectRatioMode != AspectRatioMode.FIT,
-                                onClick = { viewModel.cycleAspectRatio() },
+                                onClick = {
+                                    bumpHudInteraction()
+                                    viewModel.cycleAspectRatio()
+                                },
                                 tag = "player_aspect_pill"
                             )
                             IconButton(
-                                onClick = { viewModel.cycleOrientation() },
+                                onClick = {
+                                    bumpHudInteraction()
+                                    viewModel.cycleOrientation()
+                                },
                                 modifier = Modifier.testTag("player_rotate_button")
                             ) {
                                 Icon(Icons.Rounded.ScreenRotation, contentDescription = "Rotate orientation", tint = WarmIvory)
@@ -1047,6 +1223,138 @@ fun PlayerScreen(
     }
 }
 
+@Composable
+private fun DoubleTapSkipArcOverlay(
+    feedback: Pair<Boolean, Int>?,
+    pulseKey: Int,
+    modifier: Modifier = Modifier
+) {
+    val rippleProgress = remember { Animatable(0f) }
+    LaunchedEffect(pulseKey) {
+        if (feedback != null) {
+            rippleProgress.snapTo(0.15f)
+            rippleProgress.animateTo(
+                targetValue = 1f,
+                animationSpec = tween(durationMillis = 260, easing = FastOutSlowInEasing)
+            )
+        }
+    }
+
+    AnimatedVisibility(
+        visible = feedback != null,
+        enter = fadeIn(tween(110)),
+        exit = fadeOut(tween(180)),
+        modifier = modifier
+    ) {
+        feedback?.let { (isForward, seconds) ->
+            Box(modifier = Modifier.fillMaxSize()) {
+                // Expanding Ice Cyan directional arc on the left or right third
+                Canvas(
+                    modifier = Modifier
+                        .fillMaxHeight()
+                        .fillMaxWidth(0.36f)
+                        .align(if (isForward) Alignment.CenterEnd else Alignment.CenterStart)
+                ) {
+                    val p = rippleProgress.value
+                    val centerX = if (isForward) size.width * 1.18f else -size.width * 0.18f
+                    val centerY = size.height / 2f
+                    val maxRadius = maxOf(size.width * 1.25f, size.height * 0.58f)
+                    drawCircle(
+                        color = TimelineIceCyan.copy(alpha = (0.18f * (1.1f - p * 0.35f)).coerceIn(0.05f, 0.2f)),
+                        radius = maxRadius * p,
+                        center = Offset(centerX, centerY)
+                    )
+                }
+
+                // Crisp directional badge pill
+                Surface(
+                    shape = RoundedCornerShape(28.dp),
+                    color = WarmObsidianLow.copy(alpha = 0.88f),
+                    border = BorderStroke(1.dp, TimelineIceCyan.copy(alpha = 0.65f)),
+                    modifier = Modifier
+                        .align(if (isForward) Alignment.CenterEnd else Alignment.CenterStart)
+                        .padding(horizontal = 30.dp)
+                        .graphicsLayer {
+                            val s = 0.94f + (rippleProgress.value * 0.06f)
+                            scaleX = s
+                            scaleY = s
+                        }
+                ) {
+                    Row(
+                        modifier = Modifier.padding(horizontal = 20.dp, vertical = 14.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(
+                            imageVector = if (isForward) Icons.Rounded.FastForward else Icons.Rounded.FastRewind,
+                            contentDescription = null,
+                            tint = TimelineIceCyan,
+                            modifier = Modifier.size(28.dp)
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            text = "${if (isForward) "+" else "-"}${seconds}s",
+                            style = LumaMonoStyle.copy(
+                                color = WarmIvory,
+                                fontWeight = FontWeight.Bold
+                            )
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun PlayerTimelineRow(
+    positionMs: Long,
+    bufferedPositionMs: Long,
+    durationMs: Long,
+    isStream: Boolean,
+    abPointAMs: Long?,
+    abPointBMs: Long?,
+    isDragging: Boolean,
+    onScrubStart: (Long) -> Unit,
+    onScrubMove: (Long) -> Unit,
+    onScrubCommit: (Long) -> Unit
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Text(
+            text = FormatUtils.formatDuration(positionMs),
+            style = LumaMonoStyle.copy(color = WarmIvory, fontWeight = FontWeight.SemiBold)
+        )
+        CinemaTimelineBar(
+            positionMs = positionMs,
+            bufferedPositionMs = bufferedPositionMs,
+            durationMs = durationMs,
+            abPointAMs = abPointAMs,
+            abPointBMs = abPointBMs,
+            isDragging = isDragging,
+            onScrubStart = onScrubStart,
+            onScrubMove = onScrubMove,
+            onScrubCommit = onScrubCommit,
+            modifier = Modifier
+                .weight(1f)
+                .padding(horizontal = 10.dp)
+                .testTag("player_seek_slider")
+        )
+        Text(
+            text = if (isStream && durationMs <= 0L) {
+                "LIVE"
+            } else {
+                FormatUtils.formatDuration(durationMs)
+            },
+            style = LumaMonoStyle.copy(
+                color = if (isStream && durationMs <= 0L) ErrorRed else WarmStoneSecondary,
+                fontWeight = FontWeight.Medium
+            )
+        )
+    }
+}
+
 /**
  * High-contrast Ice Cyan Cinema Timeline Scrubber:
  * - Dark translucent contrast rail backdrop so it stays clearly visible over bright white scenes
@@ -1091,7 +1399,6 @@ private fun CinemaTimelineBar(
         val barWidthPx = constraints.maxWidth.toFloat().coerceAtLeast(1f)
         val density = LocalDensity.current
 
-        // Floating timecode preview bubble directly above thumb while dragging
         if (isDragging && seekable) {
             val bubbleHalfPx = with(density) { 42.dp.toPx() }
             val thumbCenterX = (playedFraction * barWidthPx)
@@ -1155,7 +1462,7 @@ private fun CinemaTimelineBar(
             val shadowH = trackH + with(density) { 4.dp.toPx() }
             val radius = CornerRadius(trackH / 2f, trackH / 2f)
 
-            // 1. Dark contrast rail backdrop (ensures 100% legibility over bright white scenes)
+            // 1. Dark contrast rail backdrop
             drawRoundRect(
                 color = TimelineRailShadow,
                 topLeft = Offset(hPad - 2f, centerY - shadowH / 2f),
@@ -1171,7 +1478,7 @@ private fun CinemaTimelineBar(
                 cornerRadius = radius
             )
 
-            // 3. Visible buffered track (Sky-Ice ahead of playhead for online streams)
+            // 3. Visible buffered track
             val bufferedW = (usableW * bufferedFraction).coerceAtLeast(0f)
             if (bufferedW > 0f) {
                 drawRoundRect(
@@ -1276,6 +1583,7 @@ private fun HudActionPill(
         border = BorderStroke(1.dp, if (highlighted) CinemaAmber else WarmBorder),
         modifier = Modifier
             .height(36.dp)
+            .lumaPressScale()
             .testTag(tag)
     ) {
         Box(
@@ -1347,7 +1655,6 @@ private fun computeVideoViewportSize(
     }
 
     return when (mode) {
-        // Maximizes display area without cropping or distorting original video aspect ratio
         AspectRatioMode.FIT -> fitRatio(sourceRatio)
         AspectRatioMode.FILL -> fillRatio(sourceRatio)
         AspectRatioMode.STRETCH -> containerW to containerH
@@ -1362,6 +1669,15 @@ private fun computeVideoViewportSize(
             }
         }
     }
+}
+
+private fun readBatteryPercent(context: Context): Int {
+    return runCatching {
+        val status = context.registerReceiver(null, IntentFilter(Intent.ACTION_BATTERY_CHANGED))
+        val level = status?.getIntExtra(BatteryManager.EXTRA_LEVEL, -1) ?: -1
+        val scale = status?.getIntExtra(BatteryManager.EXTRA_SCALE, -1) ?: -1
+        if (level >= 0 && scale > 0) (level * 100) / scale else -1
+    }.getOrDefault(-1)
 }
 
 private fun readCurrentBrightness(activity: Activity?): Float {

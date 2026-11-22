@@ -15,6 +15,7 @@ import com.example.LumaApplication
 import com.example.data.model.AspectRatioMode
 import com.example.data.model.AudioTrackOption
 import com.example.data.model.EqPreset
+import com.example.data.model.FormatUtils
 import com.example.data.model.PlaybackQueueItem
 import com.example.data.model.PlayerOrientationMode
 import com.example.data.model.SubtitleEdgeStyle
@@ -34,12 +35,13 @@ import kotlinx.coroutines.launch
 import kotlin.math.abs
 
 enum class ActivePlayerSheet {
-    NONE, TRACKS, AUDIO_FX, SPEED, TOOLS, DIAGNOSTICS
+    NONE, AUDIO_TRACKS, TRACKS, AUDIO_FX, SPEED, TOOLS, DIAGNOSTICS
 }
 
 data class PlayerUiState(
     val title: String = "Luma Player",
     val isStream: Boolean = false,
+    val isCurrentItemSeekable: Boolean = true,
     val isPlaying: Boolean = false,
     val isBuffering: Boolean = false,
     val positionMs: Long = 0L,
@@ -48,8 +50,9 @@ data class PlayerUiState(
     val playbackSpeed: Float = 1.0f,
     val hasNext: Boolean = false,
     val hasPrevious: Boolean = false,
-    val videoWidth: Int = 16,
-    val videoHeight: Int = 9,
+    // 0x0 until real decoded video dimensions arrive (prevents portrait-to-landscape flash on launch)
+    val videoWidth: Int = 0,
+    val videoHeight: Int = 0,
     val aspectRatioMode: AspectRatioMode = AspectRatioMode.FIT,
     val zoomScale: Float = 1.0f,
     val isLocked: Boolean = false,
@@ -62,6 +65,8 @@ data class PlayerUiState(
     val videoTracks: List<VideoTrackOption> = emptyList(),
     val isAutoMaxQuality: Boolean = true,
     val audioTracks: List<AudioTrackOption> = emptyList(),
+    val audioDisabled: Boolean = false,
+    val activeAudioLanguageCode: String? = null,
     val subtitleTracks: List<SubtitleTrackOption> = emptyList(),
     val subtitlesDisabled: Boolean = false,
     val activeCues: List<Cue> = emptyList(),
@@ -107,7 +112,7 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
             }
         }
 
-        // Event-driven track extraction — runs ONLY when Media3 reports track changes (zero per-tick GC churn)
+        // Event-driven track extraction — runs ONLY when Media3 reports track changes
         viewModelScope.launch {
             combine(PlayerSessionHolder.activePlayer, PlayerSessionHolder.tracksVersion) { player, _ -> player }
                 .collect { player ->
@@ -135,6 +140,7 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
                     val buf = player.bufferedPosition.coerceAtLeast(0L)
                     val isPlaying = player.isPlaying
                     val isBuffering = player.playbackState == Player.STATE_BUFFERING
+                    val isSeekable = player.isCurrentMediaItemSeekable
                     val size = player.videoSize
                     val vWidth = if (size.width > 0) size.width else current.videoWidth
                     val vHeight = if (size.height > 0) size.height else current.videoHeight
@@ -142,7 +148,7 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
                     // Keep rapid online/offline skip position steady while remote stream buffers to target
                     val pendingTarget = pendingSeekTargetMs
                     val displayPos = if (pendingTarget != null && now <= pendingSeekExpiresAtMs) {
-                        if (!isBuffering && abs(rawPos - pendingTarget) < 1_500L) {
+                        if (!isBuffering && abs(rawPos - pendingTarget) < 1_800L) {
                             pendingSeekTargetMs = null
                             rawPos
                         } else {
@@ -156,7 +162,7 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
                     // A-B Repeat check
                     val ptA = current.abPointAMs
                     val ptB = current.abPointBMs
-                    if (ptA != null && ptB != null && ptB > ptA + 400L && rawPos >= ptB) {
+                    if (ptA != null && ptB != null && ptB > ptA + 400L && rawPos >= ptB && isSeekable) {
                         player.seekTo(ptA)
                     }
 
@@ -190,6 +196,7 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
                     _uiState.value = current.copy(
                         title = item?.title ?: player.mediaMetadata.title?.toString() ?: "Luma Player",
                         isStream = item?.isStream ?: false,
+                        isCurrentItemSeekable = isSeekable,
                         isPlaying = isPlaying,
                         isBuffering = isBuffering,
                         positionMs = displayPos,
@@ -216,6 +223,8 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
             videoTracks = extracted.videoTracks,
             isAutoMaxQuality = extracted.isAutoMaxQuality,
             audioTracks = extracted.audioTracks,
+            audioDisabled = extracted.audioDisabled,
+            activeAudioLanguageCode = extracted.activeAudioLanguageCode,
             subtitleTracks = extracted.subtitleTracks,
             subtitlesDisabled = extracted.subtitlesDisabled
         )
@@ -234,46 +243,71 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
         }
     }
 
-    fun seekTo(positionMs: Long) {
-        val player = PlayerSessionHolder.activePlayer.value ?: return
-        val maxDur = player.duration.takeIf { it != C.TIME_UNSET && it > 0L } ?: Long.MAX_VALUE
-        val target = positionMs.coerceIn(0L, maxDur)
+    /**
+     * Layer 4 online seek safeguard:
+     * Never calls player.seekTo() blindly on an unseekable remote stream (which causes ExoPlayer
+     * to reset playback back to 00:00), and clamps targets safely when duration is unknown or near EOF.
+     */
+    fun seekTo(positionMs: Long): Boolean {
+        val player = PlayerSessionHolder.activePlayer.value ?: return false
+        if (!player.isCurrentMediaItemSeekable) {
+            showToast("Server does not allow skipping on this stream")
+            return false
+        }
+        val dur = player.duration.takeIf { it != C.TIME_UNSET && it > 0L }
+        val safeUpper = when {
+            dur != null -> (dur - 400L).coerceAtLeast(0L)
+            else -> maxOf(player.bufferedPosition, player.currentPosition)
+        }
+        val target = positionMs.coerceIn(0L, safeUpper.coerceAtLeast(0L))
         pendingSeekTargetMs = target
-        pendingSeekExpiresAtMs = System.currentTimeMillis() + 700L
+        pendingSeekExpiresAtMs = System.currentTimeMillis() + 1_100L
         player.seekTo(target)
         _uiState.value = _uiState.value.copy(positionMs = target)
+        return true
     }
 
-    fun seekBy(deltaMs: Long) {
-        val player = PlayerSessionHolder.activePlayer.value ?: return
+    fun seekBy(deltaMs: Long): Boolean {
+        val player = PlayerSessionHolder.activePlayer.value ?: return false
+        if (!player.isCurrentMediaItemSeekable) {
+            showToast("Server does not allow skipping on this stream")
+            return false
+        }
         val now = System.currentTimeMillis()
         val basePos = if (pendingSeekTargetMs != null && now <= pendingSeekExpiresAtMs) {
             pendingSeekTargetMs!!
         } else {
             player.currentPosition.coerceAtLeast(0L)
         }
-        val maxDur = player.duration.takeIf { it != C.TIME_UNSET && it > 0L } ?: Long.MAX_VALUE
-        val target = (basePos + deltaMs).coerceIn(0L, maxDur)
+        val dur = player.duration.takeIf { it != C.TIME_UNSET && it > 0L }
+        val safeUpper = when {
+            dur != null -> (dur - 400L).coerceAtLeast(0L)
+            else -> maxOf(player.bufferedPosition, basePos)
+        }
+        val target = (basePos + deltaMs).coerceIn(0L, safeUpper.coerceAtLeast(0L))
         pendingSeekTargetMs = target
-        pendingSeekExpiresAtMs = now + 900L
+        pendingSeekExpiresAtMs = now + 1_200L
         player.seekTo(target)
         _uiState.value = _uiState.value.copy(positionMs = target)
+        return true
     }
 
     fun skipNext() {
         val player = PlayerSessionHolder.activePlayer.value ?: return
         if (player.hasNextMediaItem()) {
+            pendingSeekTargetMs = null
             player.seekToNextMediaItem()
         }
     }
 
     fun skipPrevious() {
         val player = PlayerSessionHolder.activePlayer.value ?: return
-        if (player.currentPosition > 4_000L) {
+        pendingSeekTargetMs = null
+        if (player.currentPosition > 4_000L && player.isCurrentMediaItemSeekable) {
             player.seekTo(0L)
         } else if (player.hasPreviousMediaItem()) {
             player.seekToPreviousMediaItem()
-        } else {
+        } else if (player.isCurrentMediaItemSeekable) {
             player.seekTo(0L)
         }
     }
@@ -359,9 +393,18 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
         showToast("Quality locked: ${option.label}")
     }
 
-    fun selectAudioTrack(option: AudioTrackOption) {
+    fun selectAudioTrack(option: AudioTrackOption?) {
         val player = PlayerSessionHolder.activePlayer.value ?: return
         val selector = PlayerSessionHolder.serviceInstance?.getTrackSelector() ?: return
+        if (option == null) {
+            selector.setParameters(
+                selector.buildUponParameters()
+                    .setTrackTypeDisabled(C.TRACK_TYPE_AUDIO, true)
+            )
+            refreshTracks(player)
+            showToast("Audio Muted")
+            return
+        }
         val group = player.currentTracks.groups.getOrNull(option.groupIndex) ?: return
         selector.setParameters(
             selector.buildUponParameters()
@@ -553,6 +596,8 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
         val videoTracks: List<VideoTrackOption>,
         val isAutoMaxQuality: Boolean,
         val audioTracks: List<AudioTrackOption>,
+        val audioDisabled: Boolean,
+        val activeAudioLanguageCode: String?,
         val subtitleTracks: List<SubtitleTrackOption>,
         val subtitlesDisabled: Boolean
     )
@@ -565,6 +610,7 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
         val selectorParams = PlayerSessionHolder.serviceInstance?.getTrackSelector()?.parameters
         val hasVideoOverride = selectorParams?.overrides?.values?.any { it.type == C.TRACK_TYPE_VIDEO } == true
         val subsDisabled = selectorParams?.disabledTrackTypes?.contains(C.TRACK_TYPE_TEXT) == true
+        val audioDisabled = selectorParams?.disabledTrackTypes?.contains(C.TRACK_TYPE_AUDIO) == true
 
         player.currentTracks.groups.forEachIndexed { groupIdx, group ->
             when (group.type) {
@@ -592,21 +638,30 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
                 C.TRACK_TYPE_AUDIO -> {
                     for (i in 0 until group.length) {
                         val f = group.getTrackFormat(i)
-                        val lang = f.language?.uppercase() ?: "UND"
-                        val label = f.label?.takeIf { it.isNotBlank() }
-                            ?: "Track ${audioList.size + 1} ($lang)"
+                        val shortLang = FormatUtils.shortLanguageCode(f.language)
+                        val displayLang = FormatUtils.decodeLanguageName(f.language)
+                        val rawLabel = f.label?.trim().orEmpty()
+                        val formattedLabel = when {
+                            rawLabel.isNotBlank() && !rawLabel.equals(displayLang, ignoreCase = true) ->
+                                "$displayLang · $rawLabel"
+                            displayLang != "Original" ->
+                                "$displayLang (Track ${audioList.size + 1})"
+                            else ->
+                                "Audio Track ${audioList.size + 1}"
+                        }
                         audioList.add(
                             AudioTrackOption(
                                 id = "${groupIdx}_$i",
                                 groupIndex = groupIdx,
                                 trackIndex = i,
-                                label = label,
-                                language = lang,
+                                label = formattedLabel,
+                                language = shortLang,
+                                languageDisplayName = displayLang,
                                 codec = LumaPlaybackService.simplifyCodec(f.sampleMimeType, f.codecs),
                                 channels = f.channelCount,
                                 sampleRateHz = f.sampleRate,
                                 bitrateBps = f.bitrate,
-                                isSelected = group.isTrackSelected(i)
+                                isSelected = !audioDisabled && group.isTrackSelected(i)
                             )
                         )
                     }
@@ -614,16 +669,25 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
                 C.TRACK_TYPE_TEXT -> {
                     for (i in 0 until group.length) {
                         val f = group.getTrackFormat(i)
-                        val lang = f.language?.uppercase() ?: "EXT"
-                        val label = f.label?.takeIf { it.isNotBlank() }
-                            ?: "Subtitle ${subList.size + 1} ($lang)"
+                        val shortLang = if (f.language.isNullOrBlank()) "EXT" else FormatUtils.shortLanguageCode(f.language)
+                        val displayLang = if (f.language.isNullOrBlank()) "External" else FormatUtils.decodeLanguageName(f.language)
+                        val rawLabel = f.label?.trim().orEmpty()
+                        val formattedLabel = when {
+                            rawLabel.isNotBlank() && !rawLabel.equals(displayLang, ignoreCase = true) ->
+                                "$displayLang · $rawLabel"
+                            displayLang != "Original" ->
+                                "$displayLang (Sub ${subList.size + 1})"
+                            else ->
+                                "Subtitle ${subList.size + 1}"
+                        }
                         subList.add(
                             SubtitleTrackOption(
                                 id = "${groupIdx}_$i",
                                 groupIndex = groupIdx,
                                 trackIndex = i,
-                                label = label,
-                                language = lang,
+                                label = formattedLabel,
+                                language = shortLang,
+                                languageDisplayName = displayLang,
                                 mimeType = f.sampleMimeType?.substringAfter('/')?.uppercase() ?: "TEXT",
                                 isSelected = !subsDisabled && group.isTrackSelected(i)
                             )
@@ -633,10 +697,18 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
             }
         }
 
+        val activeAudioCode = if (audioDisabled) {
+            "MUTE"
+        } else {
+            audioList.firstOrNull { it.isSelected }?.language
+        }
+
         return ExtractedTracks(
             videoTracks = videoList.sortedWith(compareByDescending<VideoTrackOption> { it.height }.thenByDescending { it.bitrateBps }),
             isAutoMaxQuality = !hasVideoOverride,
             audioTracks = audioList,
+            audioDisabled = audioDisabled,
+            activeAudioLanguageCode = activeAudioCode,
             subtitleTracks = subList,
             subtitlesDisabled = subsDisabled || subList.none { it.isSelected }
         )

@@ -1,14 +1,18 @@
 package com.example.ui.theme
 
 import android.app.Activity
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.ColorScheme
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Shapes
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.SideEffect
+import androidx.compose.runtime.getValue
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.unit.dp
@@ -80,8 +84,35 @@ val LumaShapes = Shapes(
 )
 
 @Composable
+private fun animateSchemeColor(target: Color, label: String): Color {
+    val animated by animateColorAsState(
+        targetValue = target,
+        animationSpec = tween(durationMillis = LumaMotion.THEME_CROSSFADE_MS),
+        label = label
+    )
+    return animated
+}
+
+@Composable
+private fun rememberAnimatedColorScheme(target: ColorScheme, animate: Boolean): ColorScheme {
+    if (!animate) return target
+    return target.copy(
+        primary = animateSchemeColor(target.primary, "primary"),
+        primaryContainer = animateSchemeColor(target.primaryContainer, "primaryContainer"),
+        background = animateSchemeColor(target.background, "background"),
+        onBackground = animateSchemeColor(target.onBackground, "onBackground"),
+        surface = animateSchemeColor(target.surface, "surface"),
+        onSurface = animateSchemeColor(target.onSurface, "onSurface"),
+        surfaceContainerLow = animateSchemeColor(target.surfaceContainerLow, "surfaceContainerLow"),
+        surfaceContainer = animateSchemeColor(target.surfaceContainer, "surfaceContainer"),
+        surfaceContainerHigh = animateSchemeColor(target.surfaceContainerHigh, "surfaceContainerHigh"),
+        outlineVariant = animateSchemeColor(target.outlineVariant, "outlineVariant")
+    )
+}
+
+@Composable
 fun LumaPlayerTheme(
-    themeMode: AppThemeMode = AppThemeMode.AMOLED_DARK,
+    themeMode: AppThemeMode = AppThemeMode.LIGHT,
     forceDark: Boolean = false,
     content: @Composable () -> Unit
 ) {
@@ -92,7 +123,9 @@ fun LumaPlayerTheme(
         else -> isSystemInDarkTheme()
     }
 
-    val colorScheme = if (isDark) AmoledDarkColorScheme else CrispLightColorScheme
+    val targetScheme = if (isDark) AmoledDarkColorScheme else CrispLightColorScheme
+    val colorScheme = rememberAnimatedColorScheme(target = targetScheme, animate = !forceDark)
+
     val view = LocalView.current
     if (!view.isInEditMode) {
         SideEffect {
