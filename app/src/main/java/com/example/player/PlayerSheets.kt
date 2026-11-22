@@ -23,20 +23,15 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Add
-import androidx.compose.material.icons.rounded.Audiotrack
 import androidx.compose.material.icons.rounded.CheckCircle
-import androidx.compose.material.icons.rounded.ClosedCaption
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.Equalizer
 import androidx.compose.material.icons.rounded.FolderOpen
 import androidx.compose.material.icons.rounded.Headphones
-import androidx.compose.material.icons.rounded.HighQuality
 import androidx.compose.material.icons.rounded.Info
 import androidx.compose.material.icons.rounded.NightlightRound
 import androidx.compose.material.icons.rounded.Remove
 import androidx.compose.material.icons.rounded.Repeat
-import androidx.compose.material.icons.rounded.Speed
-import androidx.compose.material.icons.rounded.SubtitlesOff
 import androidx.compose.material.icons.rounded.VolumeUp
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -76,15 +71,19 @@ import com.example.data.model.PlayerOrientationMode
 import com.example.data.model.SubtitleEdgeStyle
 import com.example.data.model.VideoDiagnostics
 import com.example.data.preferences.UserSettings
+import com.example.ui.theme.AmoledBlack
 import com.example.ui.theme.BoostAmber
-import com.example.ui.theme.ElectricBlue
+import com.example.ui.theme.ChampagneGold
+import com.example.ui.theme.CinemaAmber
 import com.example.ui.theme.HwDecodeGreen
 import com.example.ui.theme.LumaMonoStyle
-import com.example.ui.theme.LuminousCyan
-import com.example.ui.theme.ObsidianBorder
-import com.example.ui.theme.ObsidianContainer
-import com.example.ui.theme.ObsidianContainerHigh
-import com.example.ui.theme.ObsidianSurface
+import com.example.ui.theme.TimelineIceCyan
+import com.example.ui.theme.WarmBorder
+import com.example.ui.theme.WarmIvory
+import com.example.ui.theme.WarmObsidianContainer
+import com.example.ui.theme.WarmObsidianHigh
+import com.example.ui.theme.WarmObsidianLow
+import com.example.ui.theme.WarmStoneSecondary
 import java.util.Locale
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -96,6 +95,7 @@ fun PlayerActiveModalSheet(
     diagnostics: VideoDiagnostics,
     backgroundPlayActive: Boolean,
     viewModel: PlayerViewModel,
+    onEnterBackgroundAudio: () -> Unit,
     onPickExternalSubtitle: () -> Unit
 ) {
     if (uiState.activeSheet == ActivePlayerSheet.NONE) return
@@ -104,8 +104,8 @@ fun PlayerActiveModalSheet(
     ModalBottomSheet(
         onDismissRequest = { viewModel.closeSheet() },
         sheetState = sheetState,
-        containerColor = ObsidianSurface.copy(alpha = 0.97f),
-        contentColor = Color.White,
+        containerColor = WarmObsidianLow.copy(alpha = 0.98f),
+        contentColor = WarmIvory,
         dragHandle = null
     ) {
         Column(
@@ -134,6 +134,7 @@ fun PlayerActiveModalSheet(
                 ActivePlayerSheet.TOOLS -> PlayerToolsSheet(
                     uiState = uiState,
                     backgroundPlayActive = backgroundPlayActive,
+                    onEnterBackgroundAudio = onEnterBackgroundAudio,
                     viewModel = viewModel
                 )
                 ActivePlayerSheet.DIAGNOSTICS -> VideoDiagnosticsSheet(
@@ -155,13 +156,13 @@ private fun SheetHeader(title: String, subtitle: String? = null, onClose: () -> 
         horizontalArrangement = Arrangement.SpaceBetween
     ) {
         Column(modifier = Modifier.weight(1f)) {
-            Text(title, style = MaterialTheme.typography.titleLarge, color = Color.White)
+            Text(title, style = MaterialTheme.typography.titleLarge, color = WarmIvory)
             if (subtitle != null) {
-                Text(subtitle, style = MaterialTheme.typography.bodySmall, color = Color(0xFF94A3B8))
+                Text(subtitle, style = MaterialTheme.typography.bodySmall, color = WarmStoneSecondary)
             }
         }
         IconButton(onClick = onClose, modifier = Modifier.testTag("sheet_close_button")) {
-            Icon(Icons.Rounded.Close, contentDescription = "Close sheet", tint = Color(0xFF94A3B8))
+            Icon(Icons.Rounded.Close, contentDescription = "Close sheet", tint = WarmStoneSecondary)
         }
     }
     Spacer(modifier = Modifier.height(12.dp))
@@ -186,8 +187,8 @@ private fun TracksAndSubtitlesSheet(
 
     TabRow(
         selectedTabIndex = selectedTab,
-        containerColor = ObsidianContainer,
-        contentColor = LuminousCyan,
+        containerColor = WarmObsidianContainer,
+        contentColor = CinemaAmber,
         modifier = Modifier.clip(RoundedCornerShape(12.dp))
     ) {
         tabs.forEachIndexed { index, label ->
@@ -215,7 +216,7 @@ private fun TracksAndSubtitlesSheet(
                 Text(
                     "Playing native source stream without downscaling.",
                     style = MaterialTheme.typography.bodyMedium,
-                    color = Color(0xFF94A3B8),
+                    color = WarmStoneSecondary,
                     modifier = Modifier.padding(vertical = 8.dp)
                 )
             } else {
@@ -236,7 +237,7 @@ private fun TracksAndSubtitlesSheet(
                 Text(
                     "Default audio track active.",
                     style = MaterialTheme.typography.bodyMedium,
-                    color = Color(0xFF94A3B8)
+                    color = WarmStoneSecondary
                 )
             } else {
                 uiState.audioTracks.forEach { track ->
@@ -262,8 +263,8 @@ private fun TracksAndSubtitlesSheet(
             Button(
                 onClick = onPickExternalSubtitle,
                 colors = ButtonDefaults.buttonColors(
-                    containerColor = ElectricBlue,
-                    contentColor = Color.White
+                    containerColor = CinemaAmber,
+                    contentColor = AmoledBlack
                 ),
                 modifier = Modifier
                     .fillMaxWidth()
@@ -295,10 +296,10 @@ private fun TracksAndSubtitlesSheet(
                 Spacer(modifier = Modifier.height(8.dp))
             }
 
-            HorizontalDivider(color = ObsidianBorder, modifier = Modifier.padding(vertical = 12.dp))
+            HorizontalDivider(color = WarmBorder, modifier = Modifier.padding(vertical = 12.dp))
 
             // Subtitle Sync Offset (-10.0s to +10.0s in 100ms steps)
-            Text("Subtitle Sync Offset", style = MaterialTheme.typography.titleMedium, color = Color.White)
+            Text("Subtitle Sync Offset", style = MaterialTheme.typography.titleMedium, color = WarmIvory)
             Spacer(modifier = Modifier.height(6.dp))
             Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -314,7 +315,7 @@ private fun TracksAndSubtitlesSheet(
                 }
                 Text(
                     text = String.format(Locale.US, "%+.1fs", settings.subtitleSyncOffsetMs / 1000f),
-                    style = LumaMonoStyle.copy(color = LuminousCyan)
+                    style = LumaMonoStyle.copy(color = CinemaAmber)
                 )
                 OutlinedButton(
                     onClick = { viewModel.updateSubtitleStyle(syncOffsetMs = settings.subtitleSyncOffsetMs + 100L) },
@@ -334,33 +335,33 @@ private fun TracksAndSubtitlesSheet(
             Text(
                 "Text Scale (${(settings.subtitleTextScale * 100).toInt()}%)",
                 style = MaterialTheme.typography.labelLarge,
-                color = Color(0xFFCBD5E1)
+                color = WarmIvory
             )
             Slider(
                 value = settings.subtitleTextScale,
                 onValueChange = { viewModel.updateSubtitleStyle(scale = it) },
                 valueRange = 0.6f..2.2f,
-                colors = SliderDefaults.colors(thumbColor = LuminousCyan, activeTrackColor = LuminousCyan)
+                colors = SliderDefaults.colors(thumbColor = CinemaAmber, activeTrackColor = CinemaAmber)
             )
 
             Text(
                 "Background Opacity (${(settings.subtitleBgOpacity * 100).toInt()}%)",
                 style = MaterialTheme.typography.labelLarge,
-                color = Color(0xFFCBD5E1)
+                color = WarmIvory
             )
             Slider(
                 value = settings.subtitleBgOpacity,
                 onValueChange = { viewModel.updateSubtitleStyle(bgOpacity = it) },
                 valueRange = 0f..1f,
-                colors = SliderDefaults.colors(thumbColor = LuminousCyan, activeTrackColor = LuminousCyan)
+                colors = SliderDefaults.colors(thumbColor = CinemaAmber, activeTrackColor = CinemaAmber)
             )
 
-            Text("Text Color", style = MaterialTheme.typography.labelLarge, color = Color(0xFFCBD5E1))
+            Text("Text Color", style = MaterialTheme.typography.labelLarge, color = WarmIvory)
             Spacer(modifier = Modifier.height(6.dp))
             val colorSwatches = listOf(
                 0xFFFFFFFF.toInt() to "White",
                 0xFFFFEB3B.toInt() to "Cinema Yellow",
-                0xFF00E5FF.toInt() to "Cyan",
+                0xFF38E8FF.toInt() to "Ice Cyan",
                 0xFF4ADE80.toInt() to "Mint"
             )
             Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -371,10 +372,7 @@ private fun TracksAndSubtitlesSheet(
                             .size(36.dp)
                             .clip(CircleShape)
                             .background(Color(argb))
-                            .clickable { viewModel.updateSubtitleStyle(colorArgb = argb) }
-                            .then(
-                                if (selected) Modifier.background(Color.Transparent) else Modifier
-                            ),
+                            .clickable { viewModel.updateSubtitleStyle(colorArgb = argb) },
                         contentAlignment = Alignment.Center
                     ) {
                         if (selected) {
@@ -390,7 +388,7 @@ private fun TracksAndSubtitlesSheet(
             }
 
             Spacer(modifier = Modifier.height(12.dp))
-            Text("Edge Style", style = MaterialTheme.typography.labelLarge, color = Color(0xFFCBD5E1))
+            Text("Edge Style", style = MaterialTheme.typography.labelLarge, color = WarmIvory)
             Spacer(modifier = Modifier.height(6.dp))
             FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 SubtitleEdgeStyle.entries.forEach { style ->
@@ -399,8 +397,8 @@ private fun TracksAndSubtitlesSheet(
                         onClick = { viewModel.updateSubtitleStyle(edgeStyle = style) },
                         label = { Text(style.label) },
                         colors = FilterChipDefaults.filterChipColors(
-                            selectedContainerColor = LuminousCyan.copy(alpha = 0.2f),
-                            selectedLabelColor = LuminousCyan
+                            selectedContainerColor = CinemaAmber.copy(alpha = 0.22f),
+                            selectedLabelColor = CinemaAmber
                         )
                     )
                 }
@@ -420,8 +418,8 @@ private fun TrackSelectionRow(
     Surface(
         onClick = onClick,
         shape = RoundedCornerShape(12.dp),
-        color = if (selected) LuminousCyan.copy(alpha = 0.14f) else ObsidianContainer,
-        border = BorderStroke(1.dp, if (selected) LuminousCyan else ObsidianBorder),
+        color = if (selected) CinemaAmber.copy(alpha = 0.14f) else WarmObsidianContainer,
+        border = BorderStroke(1.dp, if (selected) CinemaAmber else WarmBorder),
         modifier = Modifier.fillMaxWidth()
     ) {
         Row(
@@ -434,18 +432,18 @@ private fun TrackSelectionRow(
                 Text(
                     title,
                     style = MaterialTheme.typography.titleSmall,
-                    color = if (selected) LuminousCyan else Color.White
+                    color = if (selected) CinemaAmber else WarmIvory
                 )
-                Text(subtitle, style = MaterialTheme.typography.bodySmall, color = Color(0xFF94A3B8))
+                Text(subtitle, style = MaterialTheme.typography.bodySmall, color = WarmStoneSecondary)
             }
             if (badge.isNotBlank()) {
                 Surface(
                     shape = RoundedCornerShape(6.dp),
-                    color = if (selected) LuminousCyan.copy(alpha = 0.2f) else ObsidianContainerHigh
+                    color = if (selected) CinemaAmber.copy(alpha = 0.2f) else WarmObsidianHigh
                 ) {
                     Text(
                         badge,
-                        style = LumaMonoStyle.copy(color = if (selected) LuminousCyan else Color(0xFFCBD5E1)),
+                        style = LumaMonoStyle.copy(color = if (selected) CinemaAmber else WarmIvory),
                         modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
                     )
                 }
@@ -468,8 +466,8 @@ private fun AudioFxSheet(
     // Audio Boost (0% to +200%)
     Surface(
         shape = RoundedCornerShape(14.dp),
-        color = ObsidianContainer,
-        border = BorderStroke(1.dp, if (audioFxState.boostPercent > 0) BoostAmber.copy(alpha = 0.5f) else ObsidianBorder),
+        color = WarmObsidianContainer,
+        border = BorderStroke(1.dp, if (audioFxState.boostPercent > 0) CinemaAmber.copy(alpha = 0.55f) else WarmBorder),
         modifier = Modifier.fillMaxWidth()
     ) {
         Column(modifier = Modifier.padding(14.dp)) {
@@ -482,15 +480,15 @@ private fun AudioFxSheet(
                     Icon(
                         Icons.Rounded.VolumeUp,
                         contentDescription = null,
-                        tint = if (audioFxState.boostPercent > 0) BoostAmber else LuminousCyan
+                        tint = CinemaAmber
                     )
                     Spacer(modifier = Modifier.width(8.dp))
-                    Text("Audio Volume Boost", style = MaterialTheme.typography.titleMedium, color = Color.White)
+                    Text("Audio Volume Boost", style = MaterialTheme.typography.titleMedium, color = WarmIvory)
                 }
                 Text(
                     text = if (audioFxState.boostPercent == 0) "Off" else "+${audioFxState.boostPercent}%",
                     style = LumaMonoStyle.copy(
-                        color = if (audioFxState.boostPercent > 0) BoostAmber else Color(0xFF94A3B8)
+                        color = if (audioFxState.boostPercent > 0) CinemaAmber else WarmStoneSecondary
                     )
                 )
             }
@@ -499,15 +497,15 @@ private fun AudioFxSheet(
                 onValueChange = { viewModel.setAudioBoost(it.toInt()) },
                 valueRange = 0f..200f,
                 colors = SliderDefaults.colors(
-                    thumbColor = if (audioFxState.boostPercent > 0) BoostAmber else LuminousCyan,
-                    activeTrackColor = if (audioFxState.boostPercent > 0) BoostAmber else LuminousCyan
+                    thumbColor = CinemaAmber,
+                    activeTrackColor = CinemaAmber
                 ),
                 modifier = Modifier.testTag("audio_boost_slider")
             )
             Text(
                 "Amplifies quiet dialogue up to +15 dB via hardware LoudnessEnhancer.",
                 style = MaterialTheme.typography.bodySmall,
-                color = Color(0xFF94A3B8)
+                color = WarmStoneSecondary
             )
         }
     }
@@ -520,9 +518,9 @@ private fun AudioFxSheet(
         horizontalArrangement = Arrangement.SpaceBetween
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
-            Icon(Icons.Rounded.Equalizer, contentDescription = null, tint = LuminousCyan)
+            Icon(Icons.Rounded.Equalizer, contentDescription = null, tint = CinemaAmber)
             Spacer(modifier = Modifier.width(8.dp))
-            Text("5-Band Equalizer", style = MaterialTheme.typography.titleMedium, color = Color.White)
+            Text("5-Band Equalizer", style = MaterialTheme.typography.titleMedium, color = WarmIvory)
         }
         Switch(
             checked = audioFxState.eqEnabled,
@@ -545,8 +543,8 @@ private fun AudioFxSheet(
                 onClick = { viewModel.selectEqPreset(preset) },
                 label = { Text(preset.label) },
                 colors = FilterChipDefaults.filterChipColors(
-                    selectedContainerColor = LuminousCyan.copy(alpha = 0.2f),
-                    selectedLabelColor = LuminousCyan
+                    selectedContainerColor = CinemaAmber.copy(alpha = 0.22f),
+                    selectedLabelColor = CinemaAmber
                 )
             )
         }
@@ -567,7 +565,7 @@ private fun AudioFxSheet(
         ) {
             Text(
                 freqLabel,
-                style = LumaMonoStyle.copy(color = Color(0xFF94A3B8)),
+                style = LumaMonoStyle.copy(color = WarmStoneSecondary),
                 modifier = Modifier.width(56.dp)
             )
             Slider(
@@ -577,13 +575,13 @@ private fun AudioFxSheet(
                 enabled = audioFxState.eqEnabled,
                 modifier = Modifier.weight(1f),
                 colors = SliderDefaults.colors(
-                    thumbColor = LuminousCyan,
-                    activeTrackColor = ElectricBlue
+                    thumbColor = CinemaAmber,
+                    activeTrackColor = ChampagneGold
                 )
             )
             Text(
                 dbText,
-                style = LumaMonoStyle.copy(color = Color.White),
+                style = LumaMonoStyle.copy(color = WarmIvory),
                 modifier = Modifier.width(62.dp)
             )
         }
@@ -605,7 +603,7 @@ private fun PlaybackSpeedSheet(
 
     Text(
         text = String.format(Locale.US, "%.2fx", currentSpeed),
-        style = MaterialTheme.typography.displaySmall.copy(color = LuminousCyan),
+        style = MaterialTheme.typography.displaySmall.copy(color = CinemaAmber),
         modifier = Modifier.padding(bottom = 8.dp)
     )
 
@@ -613,7 +611,7 @@ private fun PlaybackSpeedSheet(
         value = currentSpeed,
         onValueChange = { onSelectSpeed((it * 20).toInt() / 20f) },
         valueRange = 0.25f..4.0f,
-        colors = SliderDefaults.colors(thumbColor = LuminousCyan, activeTrackColor = LuminousCyan),
+        colors = SliderDefaults.colors(thumbColor = CinemaAmber, activeTrackColor = CinemaAmber),
         modifier = Modifier.testTag("playback_speed_slider")
     )
 
@@ -631,8 +629,8 @@ private fun PlaybackSpeedSheet(
                 onClick = { onSelectSpeed(preset) },
                 label = { Text("${preset}x", style = LumaMonoStyle) },
                 colors = FilterChipDefaults.filterChipColors(
-                    selectedContainerColor = LuminousCyan.copy(alpha = 0.2f),
-                    selectedLabelColor = LuminousCyan
+                    selectedContainerColor = CinemaAmber.copy(alpha = 0.22f),
+                    selectedLabelColor = CinemaAmber
                 )
             )
         }
@@ -644,45 +642,61 @@ private fun PlaybackSpeedSheet(
 private fun PlayerToolsSheet(
     uiState: PlayerUiState,
     backgroundPlayActive: Boolean,
+    onEnterBackgroundAudio: () -> Unit,
     viewModel: PlayerViewModel
 ) {
     SheetHeader(
         title = "Playback Tools",
-        subtitle = "A-B Repeat, Sleep Timer, Aspect Ratio & Background Audio",
+        subtitle = "Background Audio, A-B Repeat, Sleep Timer & Aspect Ratio",
         onClose = { viewModel.closeSheet() }
     )
 
-    // Background Playback Toggle
+    // Session-Scoped Opt-In Background Audio Card
     Surface(
         shape = RoundedCornerShape(14.dp),
-        color = ObsidianContainer,
-        border = BorderStroke(1.dp, ObsidianBorder),
+        color = WarmObsidianContainer,
+        border = BorderStroke(1.dp, if (backgroundPlayActive) CinemaAmber.copy(alpha = 0.55f) else WarmBorder),
         modifier = Modifier.fillMaxWidth()
     ) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(14.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.SpaceBetween
-        ) {
-            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.weight(1f)) {
-                Icon(Icons.Rounded.Headphones, contentDescription = null, tint = LuminousCyan)
-                Spacer(modifier = Modifier.width(12.dp))
-                Column {
-                    Text("Background Audio Playback", style = MaterialTheme.typography.titleMedium, color = Color.White)
-                    Text(
-                        "Keep playing with screen off or outside the app",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = Color(0xFF94A3B8)
-                    )
+        Column(modifier = Modifier.padding(14.dp)) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.weight(1f)) {
+                    Icon(Icons.Rounded.Headphones, contentDescription = null, tint = CinemaAmber)
+                    Spacer(modifier = Modifier.width(12.dp))
+                    Column {
+                        Text("Background Audio (This Session)", style = MaterialTheme.typography.titleMedium, color = WarmIvory)
+                        Text(
+                            "OFF by default · Resets when video ends or changes",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = WarmStoneSecondary
+                        )
+                    }
                 }
+                Switch(
+                    checked = backgroundPlayActive,
+                    onCheckedChange = { viewModel.toggleBackgroundPlayForSession() },
+                    modifier = Modifier.testTag("background_play_switch")
+                )
             }
-            Switch(
-                checked = backgroundPlayActive,
-                onCheckedChange = { viewModel.toggleBackgroundPlay() },
-                modifier = Modifier.testTag("background_play_switch")
-            )
+            Spacer(modifier = Modifier.height(10.dp))
+            Button(
+                onClick = onEnterBackgroundAudio,
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = CinemaAmber,
+                    contentColor = AmoledBlack
+                ),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .testTag("tools_enter_background_button")
+            ) {
+                Icon(Icons.Rounded.Headphones, contentDescription = null, modifier = Modifier.size(18.dp))
+                Spacer(modifier = Modifier.width(8.dp))
+                Text("Play in Background Now")
+            }
         }
     }
 
@@ -691,15 +705,15 @@ private fun PlayerToolsSheet(
     // A-B Repeat
     Surface(
         shape = RoundedCornerShape(14.dp),
-        color = ObsidianContainer,
-        border = BorderStroke(1.dp, ObsidianBorder),
+        color = WarmObsidianContainer,
+        border = BorderStroke(1.dp, WarmBorder),
         modifier = Modifier.fillMaxWidth()
     ) {
         Column(modifier = Modifier.padding(14.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Icon(Icons.Rounded.Repeat, contentDescription = null, tint = LuminousCyan)
+                Icon(Icons.Rounded.Repeat, contentDescription = null, tint = CinemaAmber)
                 Spacer(modifier = Modifier.width(8.dp))
-                Text("A-B Loop Repeat", style = MaterialTheme.typography.titleMedium, color = Color.White)
+                Text("A-B Loop Repeat", style = MaterialTheme.typography.titleMedium, color = WarmIvory)
             }
             Spacer(modifier = Modifier.height(8.dp))
             Row(
@@ -736,8 +750,8 @@ private fun PlayerToolsSheet(
     // Sleep Timer
     Surface(
         shape = RoundedCornerShape(14.dp),
-        color = ObsidianContainer,
-        border = BorderStroke(1.dp, ObsidianBorder),
+        color = WarmObsidianContainer,
+        border = BorderStroke(1.dp, WarmBorder),
         modifier = Modifier.fillMaxWidth()
     ) {
         Column(modifier = Modifier.padding(14.dp)) {
@@ -747,16 +761,16 @@ private fun PlayerToolsSheet(
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    Icon(Icons.Rounded.NightlightRound, contentDescription = null, tint = LuminousCyan)
+                    Icon(Icons.Rounded.NightlightRound, contentDescription = null, tint = CinemaAmber)
                     Spacer(modifier = Modifier.width(8.dp))
-                    Text("Sleep Timer", style = MaterialTheme.typography.titleMedium, color = Color.White)
+                    Text("Sleep Timer", style = MaterialTheme.typography.titleMedium, color = WarmIvory)
                 }
                 val activeLabel = when {
                     uiState.sleepTimerRemainingMs != null -> FormatUtils.formatDuration(uiState.sleepTimerRemainingMs)
                     uiState.sleepAtEndOfVideo -> "End of video"
                     else -> "Off"
                 }
-                Text(activeLabel, style = LumaMonoStyle.copy(color = LuminousCyan))
+                Text(activeLabel, style = LumaMonoStyle.copy(color = CinemaAmber))
             }
             Spacer(modifier = Modifier.height(8.dp))
             FlowRow(
@@ -789,7 +803,7 @@ private fun PlayerToolsSheet(
     Spacer(modifier = Modifier.height(14.dp))
 
     // Aspect Ratio Selector
-    Text("Aspect Ratio (19.5:9 Optimized)", style = MaterialTheme.typography.titleSmall, color = Color(0xFFCBD5E1))
+    Text("Aspect Ratio (19.5:9 Optimized)", style = MaterialTheme.typography.titleSmall, color = WarmIvory)
     Spacer(modifier = Modifier.height(8.dp))
     FlowRow(
         horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -801,8 +815,8 @@ private fun PlayerToolsSheet(
                 onClick = { viewModel.setAspectRatioMode(mode) },
                 label = { Text(mode.label) },
                 colors = FilterChipDefaults.filterChipColors(
-                    selectedContainerColor = LuminousCyan.copy(alpha = 0.2f),
-                    selectedLabelColor = LuminousCyan
+                    selectedContainerColor = CinemaAmber.copy(alpha = 0.22f),
+                    selectedLabelColor = CinemaAmber
                 )
             )
         }
@@ -811,7 +825,7 @@ private fun PlayerToolsSheet(
     Spacer(modifier = Modifier.height(14.dp))
 
     // Orientation Control
-    Text("Screen Orientation", style = MaterialTheme.typography.titleSmall, color = Color(0xFFCBD5E1))
+    Text("Screen Orientation", style = MaterialTheme.typography.titleSmall, color = WarmIvory)
     Spacer(modifier = Modifier.height(8.dp))
     FlowRow(
         horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -823,8 +837,8 @@ private fun PlayerToolsSheet(
                 onClick = { viewModel.setOrientationMode(mode) },
                 label = { Text(mode.label) },
                 colors = FilterChipDefaults.filterChipColors(
-                    selectedContainerColor = ElectricBlue.copy(alpha = 0.25f),
-                    selectedLabelColor = Color.White
+                    selectedContainerColor = ChampagneGold.copy(alpha = 0.25f),
+                    selectedLabelColor = WarmIvory
                 )
             )
         }
@@ -866,14 +880,14 @@ private fun VideoDiagnosticsSheet(
 
     Surface(
         shape = RoundedCornerShape(14.dp),
-        color = ObsidianContainer,
-        border = BorderStroke(1.dp, ObsidianBorder),
+        color = WarmObsidianContainer,
+        border = BorderStroke(1.dp, WarmBorder),
         modifier = Modifier.fillMaxWidth()
     ) {
         Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
             DiagRow("Resolution", if (diagnostics.width > 0) "${diagnostics.width} × ${diagnostics.height} (${diagnostics.resolutionBadge})" else "Probing…")
             DiagRow("Frame Rate", if (diagnostics.frameRate > 0f) String.format(Locale.US, "%.2f fps (Display %.0f Hz)", diagnostics.frameRate, diagnostics.displayRefreshRateHz) else "Display ${diagnostics.displayRefreshRateHz.toInt()} Hz")
-            DiagRow("HDR Pipeline", "${diagnostics.hdrFormat} · Direct SurfaceView", accent = if (diagnostics.hdrFormat != "SDR") LuminousCyan else Color.White)
+            DiagRow("HDR Pipeline", "${diagnostics.hdrFormat} · Direct SurfaceView", accent = if (diagnostics.hdrFormat != "SDR") TimelineIceCyan else WarmIvory)
             DiagRow("Color Space", diagnostics.colorSpace)
             DiagRow(
                 "Decoder Engine",
@@ -894,7 +908,7 @@ private fun VideoDiagnosticsSheet(
 }
 
 @Composable
-private fun DiagRow(label: String, value: String, accent: Color = Color.White) {
+private fun DiagRow(label: String, value: String, accent: Color = WarmIvory) {
     Row(
         modifier = Modifier.fillMaxWidth(),
         horizontalArrangement = Arrangement.SpaceBetween,
@@ -903,7 +917,7 @@ private fun DiagRow(label: String, value: String, accent: Color = Color.White) {
         Text(
             label,
             style = MaterialTheme.typography.bodySmall,
-            color = Color(0xFF94A3B8),
+            color = WarmStoneSecondary,
             modifier = Modifier.weight(0.42f)
         )
         Text(

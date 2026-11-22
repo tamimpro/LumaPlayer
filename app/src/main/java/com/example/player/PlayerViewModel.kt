@@ -27,9 +27,11 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlin.math.abs
 
 enum class ActivePlayerSheet {
     NONE, TRACKS, AUDIO_FX, SPEED, TOOLS, DIAGNOSTICS
@@ -37,6 +39,7 @@ enum class ActivePlayerSheet {
 
 data class PlayerUiState(
     val title: String = "Luma Player",
+    val isStream: Boolean = false,
     val isPlaying: Boolean = false,
     val isBuffering: Boolean = false,
     val positionMs: Long = 0L,
@@ -88,6 +91,8 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
     val uiState: StateFlow<PlayerUiState> = _uiState.asStateFlow()
 
     private var appliedInitialPrefs = false
+    private var pendingSeekTargetMs: Long? = null
+    private var pendingSeekExpiresAtMs: Long = 0L
 
     init {
         viewModelScope.launch {
@@ -102,7 +107,17 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
             }
         }
 
-        // High-precision playback ticker (200ms) for seekbar, A-B loop, sleep timer, and synced cues
+        // Event-driven track extraction — runs ONLY when Media3 reports track changes (zero per-tick GC churn)
+        viewModelScope.launch {
+            combine(PlayerSessionHolder.activePlayer, PlayerSessionHolder.tracksVersion) { player, _ -> player }
+                .collect { player ->
+                    if (player != null) {
+                        refreshTracks(player)
+                    }
+                }
+        }
+
+        // Lightweight playback ticker (200ms) for timeline, buffer bar, A-B loop, sleep timer, and synced cues
         viewModelScope.launch {
             var lastSleepTick = System.currentTimeMillis()
             while (isActive) {
@@ -115,7 +130,7 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
                 val current = _uiState.value
 
                 if (player != null) {
-                    val pos = player.currentPosition.coerceAtLeast(0L)
+                    val rawPos = player.currentPosition.coerceAtLeast(0L)
                     val dur = player.duration.takeIf { it != C.TIME_UNSET && it > 0L } ?: 0L
                     val buf = player.bufferedPosition.coerceAtLeast(0L)
                     val isPlaying = player.isPlaying
@@ -124,10 +139,24 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
                     val vWidth = if (size.width > 0) size.width else current.videoWidth
                     val vHeight = if (size.height > 0) size.height else current.videoHeight
 
+                    // Keep rapid online/offline skip position steady while remote stream buffers to target
+                    val pendingTarget = pendingSeekTargetMs
+                    val displayPos = if (pendingTarget != null && now <= pendingSeekExpiresAtMs) {
+                        if (!isBuffering && abs(rawPos - pendingTarget) < 1_500L) {
+                            pendingSeekTargetMs = null
+                            rawPos
+                        } else {
+                            pendingTarget
+                        }
+                    } else {
+                        pendingSeekTargetMs = null
+                        rawPos
+                    }
+
                     // A-B Repeat check
                     val ptA = current.abPointAMs
                     val ptB = current.abPointBMs
-                    if (ptA != null && ptB != null && ptB > ptA + 400L && pos >= ptB) {
+                    if (ptA != null && ptB != null && ptB > ptA + 400L && rawPos >= ptB) {
                         player.seekTo(ptA)
                     }
 
@@ -152,17 +181,18 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
                         showToast("Playback paused at end of video")
                     }
 
-                    val resolvedCues = PlayerSessionHolder.subtitleSyncController.resolveCuesForPosition(pos)
+                    val resolvedCues = PlayerSessionHolder.subtitleSyncController.resolveCuesForPosition(rawPos)
                     val bufferedPct = player.bufferedPercentage.coerceIn(0, 100)
-                    PlayerSessionHolder.updateDiagnostics { it.copy(bufferedPercent = bufferedPct) }
-
-                    val extracted = extractTracks(player)
+                    if (PlayerSessionHolder.diagnostics.value.bufferedPercent != bufferedPct) {
+                        PlayerSessionHolder.updateDiagnostics { it.copy(bufferedPercent = bufferedPct) }
+                    }
 
                     _uiState.value = current.copy(
                         title = item?.title ?: player.mediaMetadata.title?.toString() ?: "Luma Player",
+                        isStream = item?.isStream ?: false,
                         isPlaying = isPlaying,
                         isBuffering = isBuffering,
-                        positionMs = pos,
+                        positionMs = displayPos,
                         durationMs = dur,
                         bufferedPositionMs = buf,
                         playbackSpeed = player.playbackParameters.speed,
@@ -172,11 +202,6 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
                         videoHeight = vHeight,
                         sleepTimerRemainingMs = remainingSleep,
                         sleepAtEndOfVideo = sleepEnd,
-                        videoTracks = extracted.videoTracks,
-                        isAutoMaxQuality = extracted.isAutoMaxQuality,
-                        audioTracks = extracted.audioTracks,
-                        subtitleTracks = extracted.subtitleTracks,
-                        subtitlesDisabled = extracted.subtitlesDisabled,
                         activeCues = resolvedCues
                     )
                 }
@@ -185,9 +210,21 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
         }
     }
 
+    private fun refreshTracks(player: ExoPlayer) {
+        val extracted = extractTracks(player)
+        _uiState.value = _uiState.value.copy(
+            videoTracks = extracted.videoTracks,
+            isAutoMaxQuality = extracted.isAutoMaxQuality,
+            audioTracks = extracted.audioTracks,
+            subtitleTracks = extracted.subtitleTracks,
+            subtitlesDisabled = extracted.subtitlesDisabled
+        )
+    }
+
     fun togglePlayPause() {
         val player = PlayerSessionHolder.activePlayer.value ?: return
         if (player.playbackState == Player.STATE_ENDED) {
+            pendingSeekTargetMs = null
             player.seekTo(0L)
             player.play()
         } else if (player.isPlaying) {
@@ -200,12 +237,27 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
     fun seekTo(positionMs: Long) {
         val player = PlayerSessionHolder.activePlayer.value ?: return
         val maxDur = player.duration.takeIf { it != C.TIME_UNSET && it > 0L } ?: Long.MAX_VALUE
-        player.seekTo(positionMs.coerceIn(0L, maxDur))
+        val target = positionMs.coerceIn(0L, maxDur)
+        pendingSeekTargetMs = target
+        pendingSeekExpiresAtMs = System.currentTimeMillis() + 700L
+        player.seekTo(target)
+        _uiState.value = _uiState.value.copy(positionMs = target)
     }
 
     fun seekBy(deltaMs: Long) {
         val player = PlayerSessionHolder.activePlayer.value ?: return
-        seekTo(player.currentPosition + deltaMs)
+        val now = System.currentTimeMillis()
+        val basePos = if (pendingSeekTargetMs != null && now <= pendingSeekExpiresAtMs) {
+            pendingSeekTargetMs!!
+        } else {
+            player.currentPosition.coerceAtLeast(0L)
+        }
+        val maxDur = player.duration.takeIf { it != C.TIME_UNSET && it > 0L } ?: Long.MAX_VALUE
+        val target = (basePos + deltaMs).coerceIn(0L, maxDur)
+        pendingSeekTargetMs = target
+        pendingSeekExpiresAtMs = now + 900L
+        player.seekTo(target)
+        _uiState.value = _uiState.value.copy(positionMs = target)
     }
 
     fun skipNext() {
@@ -290,6 +342,7 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
                 .clearOverridesOfType(C.TRACK_TYPE_VIDEO)
                 .setForceHighestSupportedBitrate(true)
         )
+        PlayerSessionHolder.activePlayer.value?.let { refreshTracks(it) }
         showToast("Quality: Auto Maximum (HDR Priority)")
     }
 
@@ -302,6 +355,7 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
                 .setForceHighestSupportedBitrate(false)
                 .setOverrideForType(TrackSelectionOverride(group.mediaTrackGroup, option.trackIndex))
         )
+        refreshTracks(player)
         showToast("Quality locked: ${option.label}")
     }
 
@@ -314,6 +368,7 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
                 .setTrackTypeDisabled(C.TRACK_TYPE_AUDIO, false)
                 .setOverrideForType(TrackSelectionOverride(group.mediaTrackGroup, option.trackIndex))
         )
+        refreshTracks(player)
         showToast("Audio: ${option.label}")
     }
 
@@ -325,6 +380,7 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
                 selector.buildUponParameters()
                     .setTrackTypeDisabled(C.TRACK_TYPE_TEXT, true)
             )
+            refreshTracks(player)
             showToast("Subtitles Off")
         } else {
             val group = player.currentTracks.groups.getOrNull(option.groupIndex) ?: return
@@ -333,6 +389,7 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
                     .setTrackTypeDisabled(C.TRACK_TYPE_TEXT, false)
                     .setOverrideForType(TrackSelectionOverride(group.mediaTrackGroup, option.trackIndex))
             )
+            refreshTracks(player)
             showToast("Subtitles: ${option.label}")
         }
     }
@@ -456,11 +513,22 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
         showToast("Sleep timer canceled")
     }
 
-    fun toggleBackgroundPlay() {
+    fun enableBackgroundAudioForSession() {
+        PlayerSessionHolder.setBackgroundPlayActive(true)
+        val player = PlayerSessionHolder.activePlayer.value
+        if (player != null && !player.isPlaying && player.playbackState != Player.STATE_ENDED) {
+            player.play()
+        }
+        showToast("Playing in background (this session)")
+    }
+
+    fun toggleBackgroundPlayForSession() {
         val next = !PlayerSessionHolder.backgroundPlayActive.value
         PlayerSessionHolder.setBackgroundPlayActive(next)
-        viewModelScope.launch { prefs.updatePlaybackFlags(backgroundPlay = next) }
-        showToast(if (next) "Background audio enabled" else "Background audio disabled")
+        showToast(
+            if (next) "Background audio on for this session"
+            else "Background audio off"
+        )
     }
 
     fun retryPlayback() {

@@ -81,10 +81,12 @@ import com.example.data.local.PlaylistWithCount
 import com.example.data.local.VideoItemEntity
 import com.example.data.model.FolderSummary
 import com.example.data.model.FormatUtils
-import com.example.ui.theme.ElectricBlue
+import com.example.ui.theme.CinemaAmber
 import com.example.ui.theme.ErrorRed
+import com.example.ui.theme.HdrGold
+import com.example.ui.theme.HwDecodeGreen
 import com.example.ui.theme.LumaMonoStyle
-import com.example.ui.theme.LuminousCyan
+import com.example.ui.theme.WarmObsidianLow
 import java.io.File
 
 @Composable
@@ -162,20 +164,20 @@ fun VideoThumbnailBox(
         ) {
             val res = FormatUtils.resolutionBadge(width, height)
             if (res.isNotBlank()) {
-                QualityBadgePill(res, LuminousCyan)
+                QualityBadgePill(res, CinemaAmber)
             }
             if (!hdrTag.isNullOrBlank()) {
-                QualityBadgePill(hdrTag, ElectricBlue)
+                QualityBadgePill(hdrTag, HdrGold)
             }
             if (frameRate >= 50f) {
-                QualityBadgePill("${frameRate.toInt()}fps", Color(0xFF22C55E))
+                QualityBadgePill("${frameRate.toInt()}fps", HwDecodeGreen)
             }
         }
 
         if (durationMs > 0L) {
             Surface(
                 shape = RoundedCornerShape(6.dp),
-                color = Color(0xCC070B14),
+                color = WarmObsidianLow.copy(alpha = 0.85f),
                 modifier = Modifier
                     .align(Alignment.BottomEnd)
                     .padding(6.dp)
@@ -191,7 +193,7 @@ fun VideoThumbnailBox(
         if (progressFraction > 0.02f) {
             LinearProgressIndicator(
                 progress = { progressFraction },
-                color = LuminousCyan,
+                color = CinemaAmber,
                 trackColor = Color(0x55FFFFFF),
                 modifier = Modifier
                     .fillMaxWidth()
@@ -206,7 +208,7 @@ fun VideoThumbnailBox(
 fun QualityBadgePill(text: String, accent: Color) {
     Surface(
         shape = RoundedCornerShape(5.dp),
-        color = Color(0xCC070B14),
+        color = WarmObsidianLow.copy(alpha = 0.85f),
         border = BorderStroke(0.75.dp, accent.copy(alpha = 0.65f))
     ) {
         Text(
@@ -302,7 +304,7 @@ fun VideoListRowCard(
                     Icon(
                         imageVector = if (video.isFavorite) Icons.Rounded.Favorite else Icons.Rounded.FavoriteBorder,
                         contentDescription = if (video.isFavorite) "Remove from favourites" else "Add to favourites",
-                        tint = if (video.isFavorite) LuminousCyan else MaterialTheme.colorScheme.onSurfaceVariant,
+                        tint = if (video.isFavorite) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = Modifier.size(20.dp)
                     )
                 }
@@ -451,7 +453,7 @@ fun FolderCard(
                 Icon(
                     imageVector = Icons.Rounded.Folder,
                     contentDescription = null,
-                    tint = LuminousCyan,
+                    tint = MaterialTheme.colorScheme.primary,
                     modifier = Modifier.size(26.dp)
                 )
             }

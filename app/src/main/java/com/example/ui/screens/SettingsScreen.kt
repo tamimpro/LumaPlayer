@@ -248,12 +248,18 @@ fun SettingsScreen(
                         checked = settings.autoResume,
                         onCheckedChange = { viewModel.updatePlaybackFlags(autoResume = it) }
                     )
-                    SettingsToggleRow(
-                        title = "Background Audio Playback",
-                        subtitle = "Continue playing audio when leaving Luma Player or locking screen",
-                        checked = settings.backgroundPlaybackEnabled,
-                        onCheckedChange = { viewModel.updatePlaybackFlags(backgroundPlay = it) }
-                    )
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(vertical = 6.dp)
+                    ) {
+                        Text("Background Audio Playback", style = MaterialTheme.typography.titleSmall)
+                        Text(
+                            "OFF by default. Tap the Background button on the video screen whenever you want audio to keep playing for that session.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
                     SettingsToggleRow(
                         title = "Auto Picture-in-Picture",
                         subtitle = "Seamlessly enter PiP window when swiping home while playing",

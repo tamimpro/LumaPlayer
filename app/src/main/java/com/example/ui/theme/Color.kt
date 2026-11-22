@@ -2,39 +2,46 @@ package com.example.ui.theme
 
 import androidx.compose.ui.graphics.Color
 
-// Precision Luminous Cinema — AMOLED Dark Palette
+// True AMOLED Black & Warm Cinema Amber — Eye-Comfortable Dark Palette
 val AmoledBlack = Color(0xFF000000)
-val ObsidianSurface = Color(0xFF070B14)
-val ObsidianContainer = Color(0xFF0D1321)
-val ObsidianContainerHigh = Color(0xFF141D2F)
-val ObsidianBorder = Color(0xFF1E293B)
+val WarmObsidianLow = Color(0xFF0A0908)
+val WarmObsidianContainer = Color(0xFF11100D)
+val WarmObsidianHigh = Color(0xFF1A1814)
+val WarmObsidianHighest = Color(0xFF24211C)
+val WarmBorder = Color(0xFF2E2A24)
+val WarmBorderSubtle = Color(0xFF1E1B17)
 
-val LuminousCyan = Color(0xFF00E5FF)
-val LuminousCyanMuted = Color(0xFF00B8D4)
-val ElectricBlue = Color(0xFF2979FF)
-val DeepElectricBlue = Color(0xFF1565C0)
-val CyanContainerDark = Color(0xFF042A36)
-val BlueContainerDark = Color(0xFF0D2149)
+val CinemaAmber = Color(0xFFF5A623)
+val CinemaAmberSoft = Color(0xFFFFD58A)
+val CinemaAmberContainerDark = Color(0xFF2C1E07)
+val ChampagneGold = Color(0xFFD9A05B)
+val ChampagneContainerDark = Color(0xFF261D12)
 
-val CrispWhite = Color(0xFFF8FAFC)
-val SlateSecondary = Color(0xFF94A3B8)
-val SlateMuted = Color(0xFF64748B)
+val WarmIvory = Color(0xFFF6F4EF)
+val WarmStoneSecondary = Color(0xFFA69F95)
+val WarmStoneMuted = Color(0xFF787168)
+
+// In-Player High-Contrast Ice Cyan Timeline & HUD Tokens
+val TimelineIceCyan = Color(0xFF38E8FF)
+val TimelineBufferIce = Color(0x887DD3FC)
+val TimelineTrackBg = Color(0x66FFFFFF)
+val TimelineRailShadow = Color(0x8C000000)
 
 // Crisp Light Palette
-val LightCanvas = Color(0xFFF8FAFC)
+val LightCanvas = Color(0xFFFAF9F6)
 val LightSurface = Color(0xFFFFFFFF)
-val LightSurfaceVariant = Color(0xFFF1F5F9)
-val LightSurfaceHigh = Color(0xFFE2E8F0)
-val LightBorder = Color(0xFFCBD5E1)
-val LightPrimaryBlue = Color(0xFF0066CC)
-val LightSecondaryCyan = Color(0xFF0097A7)
-val LightPrimaryContainer = Color(0xFFDBEAFE)
-val LightSecondaryContainer = Color(0xFFCFFAFE)
-val LightOnBackground = Color(0xFF0F172A)
-val LightOnSurfaceVariant = Color(0xFF475569)
+val LightSurfaceVariant = Color(0xFFF3F0EA)
+val LightSurfaceHigh = Color(0xFFE7E2D8)
+val LightBorder = Color(0xFFD4CEC3)
+val LightPrimaryAmber = Color(0xFFB4690E)
+val LightSecondaryGold = Color(0xFF8C5A2B)
+val LightPrimaryContainer = Color(0xFFFFE8C2)
+val LightSecondaryContainer = Color(0xFFF3E2CE)
+val LightOnBackground = Color(0xFF1A1714)
+val LightOnSurfaceVariant = Color(0xFF5C554C)
 
 // Semantic Accents
 val HwDecodeGreen = Color(0xFF22C55E)
-val BoostAmber = Color(0xFFF59E0B)
+val BoostAmber = Color(0xFFF5A623)
 val ErrorRed = Color(0xFFEF4444)
-val HdrGold = Color(0xFF38BDF8)
+val HdrGold = Color(0xFFFFCA6B)

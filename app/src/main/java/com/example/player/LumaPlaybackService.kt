@@ -14,6 +14,7 @@ import androidx.media3.common.MediaMetadata
 import androidx.media3.common.MimeTypes
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
+import androidx.media3.common.Tracks
 import androidx.media3.common.text.CueGroup
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.datasource.DefaultDataSource
@@ -22,6 +23,7 @@ import androidx.media3.exoplayer.DecoderReuseEvaluation
 import androidx.media3.exoplayer.DefaultLoadControl
 import androidx.media3.exoplayer.DefaultRenderersFactory
 import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.exoplayer.SeekParameters
 import androidx.media3.exoplayer.analytics.AnalyticsListener
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.exoplayer.trackselection.DefaultTrackSelector
@@ -203,7 +205,9 @@ class LumaPlaybackService : MediaSessionService() {
         val startIndex = request.startIndex.coerceIn(0, request.queue.lastIndex)
         val activeItem = request.queue[startIndex]
         PlayerSessionHolder.updateCurrentItem(activeItem)
-        PlayerSessionHolder.setBackgroundPlayActive(request.startInBackground || latestSettings.backgroundPlaybackEnabled)
+        // Session-scoped opt-in: OFF by default unless explicitly launched for background audio
+        PlayerSessionHolder.setBackgroundPlayActive(request.startInBackground)
+        applySeekParametersForItem(player, activeItem)
 
         val mergedHeaders = activeItem.headers
         val mediaSources = request.queue.map { item ->
@@ -353,14 +357,34 @@ class LumaPlaybackService : MediaSessionService() {
         }
     }
 
+    private fun applySeekParametersForItem(player: ExoPlayer, item: PlaybackQueueItem) {
+        // Keyframe-aligned fast seek eliminates multi-second stalls during online double-tap skips & scrubbing
+        player.setSeekParameters(
+            if (item.isStream) SeekParameters.CLOSEST_SYNC else SeekParameters.DEFAULT
+        )
+    }
+
     private val playerListener = object : Player.Listener {
         override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
             persistCurrentProgress()
-            val idx = exoPlayer?.currentMediaItemIndex ?: return
-            currentQueue.getOrNull(idx)?.let {
-                PlayerSessionHolder.updateCurrentItem(it)
+            val player = exoPlayer ?: return
+            val idx = player.currentMediaItemIndex
+            currentQueue.getOrNull(idx)?.let { item ->
+                PlayerSessionHolder.updateCurrentItem(item)
+                applySeekParametersForItem(player, item)
             }
             PlayerSessionHolder.subtitleSyncController.clear()
+            PlayerSessionHolder.notifyTracksChanged()
+        }
+
+        override fun onTracksChanged(tracks: Tracks) {
+            PlayerSessionHolder.notifyTracksChanged()
+        }
+
+        override fun onPlaybackStateChanged(playbackState: Int) {
+            if (playbackState == Player.STATE_ENDED) {
+                PlayerSessionHolder.setBackgroundPlayActive(false)
+            }
         }
 
         override fun onIsPlayingChanged(isPlaying: Boolean) {

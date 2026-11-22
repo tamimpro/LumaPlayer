@@ -36,6 +36,9 @@ object PlayerSessionHolder {
     private val _playbackError = MutableStateFlow<String?>(null)
     val playbackError: StateFlow<String?> = _playbackError.asStateFlow()
 
+    private val _tracksVersion = MutableStateFlow(0L)
+    val tracksVersion: StateFlow<Long> = _tracksVersion.asStateFlow()
+
     @Volatile
     var pendingRequest: PlaybackRequest? = null
 
@@ -53,12 +56,14 @@ object PlayerSessionHolder {
     fun registerPlayer(service: LumaPlaybackService, player: ExoPlayer) {
         serviceInstance = service
         _activePlayer.value = player
+        notifyTracksChanged()
     }
 
     fun unregisterPlayer(service: LumaPlaybackService) {
         if (serviceInstance == service) {
             serviceInstance = null
             _activePlayer.value = null
+            _backgroundPlayActive.value = false
             audioFxController.release()
             subtitleSyncController.clear()
         }
@@ -78,5 +83,9 @@ object PlayerSessionHolder {
 
     fun setPlaybackError(error: String?) {
         _playbackError.value = error
+    }
+
+    fun notifyTracksChanged() {
+        _tracksVersion.value += 1L
     }
 }

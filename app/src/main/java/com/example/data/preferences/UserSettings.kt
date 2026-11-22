@@ -27,7 +27,7 @@ data class UserSettings(
     val defaultOrientation: PlayerOrientationMode = PlayerOrientationMode.AUTO_VIDEO,
     val videoSortOption: VideoSortOption = VideoSortOption.DATE_DESC,
     val autoResume: Boolean = true,
-    val backgroundPlaybackEnabled: Boolean = true,
+    val backgroundPlaybackEnabled: Boolean = false,
     val autoEnterPip: Boolean = true,
     val preferHardwareDecoder: Boolean = true,
     val matchDisplayFrameRate: Boolean = true,
@@ -94,7 +94,7 @@ class PreferencesRepository(private val context: Context) {
             videoSortOption = prefs[Keys.VIDEO_SORT]?.let { runCatching { VideoSortOption.valueOf(it) }.getOrNull() }
                 ?: VideoSortOption.DATE_DESC,
             autoResume = prefs[Keys.AUTO_RESUME] ?: true,
-            backgroundPlaybackEnabled = prefs[Keys.BACKGROUND_PLAY] ?: true,
+            backgroundPlaybackEnabled = prefs[Keys.BACKGROUND_PLAY] ?: false,
             autoEnterPip = prefs[Keys.AUTO_PIP] ?: true,
             preferHardwareDecoder = prefs[Keys.PREFER_HW] ?: true,
             matchDisplayFrameRate = prefs[Keys.MATCH_FPS] ?: true,

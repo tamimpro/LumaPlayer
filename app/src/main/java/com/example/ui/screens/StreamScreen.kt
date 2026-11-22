@@ -54,9 +54,7 @@ import androidx.compose.ui.unit.dp
 import com.example.data.local.StreamBookmarkEntity
 import com.example.data.model.FormatUtils
 import com.example.data.model.StreamProtocol
-import com.example.ui.theme.ElectricBlue
 import com.example.ui.theme.LumaMonoStyle
-import com.example.ui.theme.LuminousCyan
 
 private data class HeaderEntry(val key: String, val value: String)
 
@@ -375,7 +373,7 @@ fun StreamScreen(
                     color = MaterialTheme.colorScheme.surfaceContainer,
                     border = BorderStroke(
                         1.dp,
-                        if (bookmark.isPinned) LuminousCyan.copy(alpha = 0.45f) else MaterialTheme.colorScheme.outlineVariant
+                        if (bookmark.isPinned) MaterialTheme.colorScheme.primary.copy(alpha = 0.5f) else MaterialTheme.colorScheme.outlineVariant
                     ),
                     modifier = Modifier
                         .fillMaxWidth()
@@ -410,7 +408,7 @@ fun StreamScreen(
                                 if (headersCount > 0) {
                                     Text(
                                         "$headersCount header(s)",
-                                        style = LumaMonoStyle.copy(color = ElectricBlue)
+                                        style = LumaMonoStyle.copy(color = MaterialTheme.colorScheme.secondary)
                                     )
                                 }
                                 if (bookmark.lastPositionMs > 2_000L) {
@@ -426,7 +424,7 @@ fun StreamScreen(
                             Icon(
                                 if (bookmark.isPinned) Icons.Rounded.Bookmark else Icons.Rounded.BookmarkBorder,
                                 contentDescription = "Pin stream",
-                                tint = if (bookmark.isPinned) LuminousCyan else MaterialTheme.colorScheme.onSurfaceVariant
+                                tint = if (bookmark.isPinned) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
                             )
                         }
                         IconButton(onClick = { onDeleteBookmark(bookmark.id) }) {

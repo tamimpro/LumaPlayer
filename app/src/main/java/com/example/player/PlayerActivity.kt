@@ -1,5 +1,6 @@
 package com.example.player
 
+import android.Manifest
 import android.app.PendingIntent
 import android.app.PictureInPictureParams
 import android.app.RemoteAction
@@ -8,11 +9,13 @@ import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.content.pm.ActivityInfo
+import android.content.pm.PackageManager
 import android.content.res.Configuration
 import android.graphics.drawable.Icon
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.widget.Toast
 import android.provider.OpenableColumns
 import android.util.Rational
 import android.view.Display
@@ -41,6 +44,11 @@ class PlayerActivity : ComponentActivity() {
 
     private val viewModel: PlayerViewModel by viewModels()
     private var isInPip by mutableStateOf(false)
+    private var suppressAutoPipOnce = false
+
+    private val notificationPermissionLauncher = registerForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { _ -> }
 
     private val subtitlePickerLauncher = registerForActivityResult(
         ActivityResultContracts.OpenDocument()
@@ -86,17 +94,18 @@ class PlayerActivity : ComponentActivity() {
         setContent {
             val uiState by viewModel.uiState.collectAsStateWithLifecycle()
             val settings by viewModel.settings.collectAsStateWithLifecycle()
+            val backgroundPlayActive by viewModel.backgroundPlayActive.collectAsStateWithLifecycle()
 
             LaunchedEffect(uiState.orientationMode, uiState.videoWidth, uiState.videoHeight) {
                 applyRequestedOrientation(uiState.orientationMode, uiState.videoWidth, uiState.videoHeight)
             }
 
-            LaunchedEffect(uiState.isPlaying, uiState.videoWidth, uiState.videoHeight, settings.autoEnterPip) {
+            LaunchedEffect(uiState.isPlaying, uiState.videoWidth, uiState.videoHeight, settings.autoEnterPip, backgroundPlayActive) {
                 updatePipParams(
                     videoWidth = uiState.videoWidth,
                     videoHeight = uiState.videoHeight,
                     isPlaying = uiState.isPlaying,
-                    autoEnter = settings.autoEnterPip
+                    autoEnter = settings.autoEnterPip && !backgroundPlayActive
                 )
             }
 
@@ -112,6 +121,7 @@ class PlayerActivity : ComponentActivity() {
                         finish()
                     },
                     onEnterPip = { enterLumaPipMode() },
+                    onEnterBackgroundAudio = { enterBackgroundAudioSession() },
                     onPickExternalSubtitle = {
                         subtitlePickerLauncher.launch(
                             arrayOf(
@@ -128,6 +138,14 @@ class PlayerActivity : ComponentActivity() {
         }
     }
 
+    override fun onResume() {
+        super.onResume()
+        suppressAutoPipOnce = false
+        if (!isInPip) {
+            configureHdrAndImmersiveWindow()
+        }
+    }
+
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         setIntent(intent)
@@ -136,6 +154,9 @@ class PlayerActivity : ComponentActivity() {
 
     override fun onUserLeaveHint() {
         super.onUserLeaveHint()
+        if (suppressAutoPipOnce || PlayerSessionHolder.backgroundPlayActive.value) {
+            return
+        }
         if (viewModel.settings.value.autoEnterPip &&
             PlayerSessionHolder.activePlayer.value?.isPlaying == true &&
             !isInPip
@@ -161,6 +182,30 @@ class PlayerActivity : ComponentActivity() {
         if (!isInPip && !PlayerSessionHolder.backgroundPlayActive.value) {
             PlayerSessionHolder.activePlayer.value?.pause()
         }
+    }
+
+    private fun enterBackgroundAudioSession() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            val granted = ContextCompat.checkSelfPermission(
+                this,
+                Manifest.permission.POST_NOTIFICATIONS
+            ) == PackageManager.PERMISSION_GRANTED
+            if (!granted) {
+                notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+            }
+        }
+        suppressAutoPipOnce = true
+        viewModel.closeSheet()
+        viewModel.enableBackgroundAudioForSession()
+        val state = viewModel.uiState.value
+        updatePipParams(
+            videoWidth = state.videoWidth,
+            videoHeight = state.videoHeight,
+            isPlaying = state.isPlaying,
+            autoEnter = false
+        )
+        Toast.makeText(this, "Playing audio in background", Toast.LENGTH_SHORT).show()
+        moveTaskToBack(true)
     }
 
     override fun onDestroy() {

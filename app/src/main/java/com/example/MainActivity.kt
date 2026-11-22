@@ -275,7 +275,7 @@ private fun LumaMainApp(viewModel: MainViewModel) {
     }
 
     fun launchVideos(list: List<VideoItemEntity>, index: Int, inBackground: Boolean) {
-        ensureNotificationPermissionIfNeeded(inBackground || settings.backgroundPlaybackEnabled)
+        ensureNotificationPermissionIfNeeded(inBackground)
         val req = viewModel.buildPlaybackRequest(list, index, inBackground)
         PlayerActivity.launch(context, req)
     }
@@ -471,13 +471,11 @@ private fun LumaMainApp(viewModel: MainViewModel) {
                                 bookmarks = streamBookmarks,
                                 parseHeaders = viewModel::parseHeadersJson,
                                 onPlayStream = { title, url, proto, headers, pin ->
-                                    ensureNotificationPermissionIfNeeded(settings.backgroundPlaybackEnabled)
                                     viewModel.saveStreamAndBuildRequest(title, url, proto, headers, pin) { req ->
                                         PlayerActivity.launch(context, req)
                                     }
                                 },
                                 onPlayBookmark = { bookmark ->
-                                    ensureNotificationPermissionIfNeeded(settings.backgroundPlaybackEnabled)
                                     PlayerActivity.launch(context, viewModel.buildStreamRequestFromBookmark(bookmark))
                                 },
                                 onTogglePinBookmark = viewModel::toggleStreamPinned,

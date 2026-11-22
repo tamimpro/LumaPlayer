@@ -43,9 +43,7 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
 import com.example.data.local.PlaylistWithCount
-import com.example.ui.theme.ElectricBlue
 import com.example.ui.theme.LumaMonoStyle
-import com.example.ui.theme.LuminousCyan
 
 @Composable
 fun PlaylistsScreen(
@@ -82,7 +80,7 @@ fun PlaylistsScreen(
                     title = "Favourites",
                     count = favoritesCount,
                     icon = Icons.Rounded.Favorite,
-                    accent = LuminousCyan,
+                    accent = MaterialTheme.colorScheme.primary,
                     onClick = onOpenFavorites,
                     modifier = Modifier
                         .weight(1f)
@@ -92,7 +90,7 @@ fun PlaylistsScreen(
                     title = "History",
                     count = historyCount,
                     icon = Icons.Rounded.History,
-                    accent = ElectricBlue,
+                    accent = MaterialTheme.colorScheme.secondary,
                     onClick = onOpenHistory,
                     modifier = Modifier
                         .weight(1f)
